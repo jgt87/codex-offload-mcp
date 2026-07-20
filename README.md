@@ -175,7 +175,66 @@ git wins. For anything that matters, go further than reading the report: run the
 the thing under test to confirm they actually fail. A suite that passes proves less than a suite
 you have watched fail for the right reason.
 
+## Orchestration
+
+**There is no orchestrator.** Nothing in this server decides what gets delegated. There is no
+router, no scheduler, no heuristic, no queue and no second model triaging work. The only thing
+steering the choice is the `codex_start` tool description, which the calling model reads at call
+time and judges against.
+
+That is deliberate. The decision needs the one thing this process cannot see — the conversation.
+Whether a task is self-contained, whether there is useful work to do while it runs, whether you are
+about to change your mind about the approach: none of that is visible from inside an MCP server, so
+the judgment stays with the model that has the context, and this server sticks to running the job
+and checking the result.
+
+The practical consequence is that **the tool description is the routing logic**. Editing it in
+`src/index.ts` is how you change delegation behaviour; there is no config to tune.
+
+### What should be offloaded
+
+All of these need to hold:
+
+| Test | Why |
+| --- | --- |
+| **Self-contained** | Codex cannot see the conversation. Anything resting on what was just worked out must be restated in full — and if restating it is most of the work, offloading is a net loss. |
+| **Slow** | Minutes, not seconds. Below ~30s the round trip costs more than it saves. |
+| **Real work to do meanwhile** | Dispatching and then sitting on `codex_status` gains nothing. |
+| **Verifiable afterwards** | Mechanical enough that `actualChanges` from git shows whether it went right. |
+| **Scoped to one `cwd`** | Codex writes to disk directly; ambiguous scope means unwanted edits. |
+
+Keep it in-process when the task needs conversation context, is fast, blocks the next decision, or
+is surgical enough that specifying it precisely costs more than just doing it.
+
+**Exploratory work is the main trap.** Investigations where each measurement changes what you look
+at next cannot be offloaded — by the time the prompt can be written, the thinking is already done.
+A useful tell is a wrong hypothesis: if you expect to have one, keep the work in-process.
+
+**Misjudging is asymmetric.** A bad question wastes a minute; a bad delegation writes files to disk.
+That asymmetry is why `codex_result` checks Codex's self-report against git instead of trusting it —
+the design already assumes a delegation can be wrong. Prefer `sandbox: "read-only"` for anything
+analytical.
+
 ## How it works
+
+### What happens when a task is offloaded
+
+1. **Baseline.** `codex_start` records the state of `cwd` before Codex touches anything: the current
+   commit, plus the set of files already dirty. This is what makes the later verification honest —
+   files you had already modified are flagged `preexisting` rather than blamed on Codex.
+2. **Dispatch.** The prompt is written to `prompt.txt` and `codex exec --json` is spawned
+   **detached**, with the prompt fed over stdin. The call returns a job id immediately; nothing
+   blocks, ever.
+3. **Streaming.** Codex writes JSONL events to `events.jsonl` as it works, and its final answer to
+   `last-message.txt`. Both are on disk, not in memory.
+4. **Polling.** `codex_status` parses the tail of the event stream into a progress view — commands
+   run, files touched, recent activity. It reports; it never waits.
+5. **Collection.** `codex_result` returns Codex's structured report *and* re-diffs the repo against
+   the baseline from step 1 to produce `actualChanges`. Two independent accounts of the same work.
+6. **Follow-up.** `codex_reply` resumes the original Codex thread by its `thread_id`, so a
+   correction lands with all of Codex's context intact rather than starting cold.
+
+### Under the hood
 
 Each job spawns `codex exec --json` as a **detached** process, with:
 
