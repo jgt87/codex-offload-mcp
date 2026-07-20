@@ -99,6 +99,13 @@ MCP connection for changes to take effect — a running server keeps the old `di
 - `src/models.ts` — tolerant reader for Codex's `models_cache.json`; the discovered facts
 - `src/route.ts` — the tier heuristic and tier→model/effort mapping; the invented part
 
+**Write-capable jobs are asked to document themselves.** `composePrompt` in `handoff.ts` appends a
+standing instruction, and the report carries a required `documentation` field. Two things about it
+are deliberate and easy to break. It biases hard toward editing existing files, because an
+unqualified version produces a `NOTES.md` in every repo it touches; and it is appended only to the
+text written to `prompt.txt`, never to `meta.prompt`, so status output keeps showing the caller's
+actual prompt. `launch()` takes the composed text as a separate argument for exactly that reason.
+
 ## Architecture notes
 
 **Jobs are detached and disk-backed.** State lives in `~/.codex-mcp/jobs/<jobId>/`

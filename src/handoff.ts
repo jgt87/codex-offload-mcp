@@ -55,15 +55,80 @@ export const HANDOFF_SCHEMA = {
       description: "What stopped you, if status is partial or blocked. Empty otherwise.",
       items: { type: "string" },
     },
+    documentation: {
+      type: "string",
+      description:
+        "Which documentation files you created or updated for this work and what you changed in " +
+        "them — or, if you updated none, why none were warranted. Answer either way; do not leave " +
+        "it empty.",
+    },
     confidence: {
       type: "string",
       enum: ["high", "medium", "low"],
       description: "How sure you are the work is correct. Say low rather than overstating.",
     },
   },
-  required: ["summary", "status", "filesChanged", "verification", "followUps", "blockers", "confidence"],
+  required: [
+    "summary",
+    "status",
+    "filesChanged",
+    "verification",
+    "followUps",
+    "blockers",
+    "documentation",
+    "confidence",
+  ],
   additionalProperties: false,
 } as const;
+
+/**
+ * Appended to the task so a job documents itself. Codex cannot see the calling
+ * conversation, so without this the docs simply never get written — the caller
+ * would have to remember to ask every time.
+ *
+ * The wording leans hard against creating new files. An instruction to
+ * "document your changes" reliably produces a CHANGES.md or NOTES.md in every
+ * repo it touches, which is worse than no documentation: it fragments what a
+ * reader has to consult and rots immediately.
+ */
+export const DOCUMENTATION_INSTRUCTION = [
+  "---",
+  "Documentation requirement (added by the caller, applies to all work above):",
+  "",
+  "If this change alters behaviour, adds a feature, changes an interface, or introduces a",
+  "constraint a future reader would need to know, update the project's existing documentation to",
+  "match — typically README.md, AGENTS.md or CLAUDE.md, or files under docs/.",
+  "",
+  "- Prefer editing existing files. Only create a new one if the project has no documentation at",
+  "  all, or clearly keeps that kind of information in separate files already.",
+  "- Do not invent a changelog. Do not add CHANGES.md, NOTES.md or similar unless the repository",
+  "  already maintains one.",
+  "- Match the surrounding document: its voice, heading depth, and level of detail.",
+  "- Update anything your change made untrue. Correcting a stale statement matters more than",
+  "  adding a new one.",
+  "- Skip it when it does not apply — an internal refactor with no observable change, or a fix too",
+  "  small to be worth a reader's attention. Say so in the `documentation` field rather than",
+  "  padding the docs.",
+].join("\n");
+
+export interface ComposeOptions {
+  /** Read-only jobs cannot write anything, so the instruction is pointless there. */
+  sandbox: string;
+  /** Explicit opt-out. Undefined means "decide from the sandbox". */
+  documentation?: boolean;
+}
+
+/** True when a job is both allowed and asked to document itself. */
+export function shouldDocument(opts: ComposeOptions): boolean {
+  if (opts.documentation === false) return false;
+  if (opts.sandbox === "read-only") return false;
+  return true;
+}
+
+/** The text actually handed to Codex, which is not always the caller's prompt. */
+export function composePrompt(prompt: string, opts: ComposeOptions): string {
+  return shouldDocument(opts) ? `${prompt}\n\n${DOCUMENTATION_INSTRUCTION}\n` : prompt;
+}
 
 export interface GitBaseline {
   head: string | null;

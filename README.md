@@ -45,6 +45,7 @@ fixed shape:
   "verification": [{ "command": "...", "passed": false, "details": "..." }],
   "followUps": ["..."],
   "blockers": ["..."],
+  "documentation": "which docs were updated, or why none were warranted",
   "confidence": "high | medium | low"
 }
 ```
@@ -429,6 +430,39 @@ job finishes rather than trusting anything cached from before.
 - `danger-full-access` — unrestricted; only when explicitly asked for
 
 Cancelling does not roll back edits already made.
+
+## Documentation
+
+Jobs that can write are asked to document themselves. A standing instruction is appended to the
+prompt telling Codex to update the project's existing documentation — `README.md`, `AGENTS.md`,
+`CLAUDE.md`, files under `docs/` — when the change alters behaviour, adds a feature, or makes an
+existing statement untrue.
+
+This exists because Codex starts cold. It cannot see the conversation that led to the task, so
+unless something asks, documentation simply never gets written and the caller has to remember every
+single time.
+
+The instruction leans hard in one direction: **edit what exists, do not create new files.** An
+unqualified "document your changes" reliably produces a `CHANGES.md` or `NOTES.md` in every
+repository it touches, which is worse than nothing — it fragments what a reader has to consult and
+goes stale immediately. Codex is told not to invent a changelog, to match the surrounding document's
+voice and structure, and to prioritise correcting statements the change made untrue over adding new
+prose. It is also told to skip documentation when the work does not warrant it, and to say so.
+
+The structured report carries a required `documentation` field, so a job has to account for what it
+wrote or explain why it wrote nothing. `actualChanges` from git shows which `.md` files were actually
+touched, so the claim is checkable rather than taken on faith — the same split the rest of the
+handoff uses.
+
+| Setting | Behaviour |
+| --- | --- |
+| default | On for `workspace-write` and `danger-full-access` |
+| `documentation: false` | Suppressed; the prompt is passed through untouched |
+| `sandbox: "read-only"` | Always off — the job could not write a file even if asked |
+
+A `codex_reply` follow-up inherits the parent job's setting, so a correction to documented work keeps
+the docs in step with it. The instruction is appended only to what Codex receives; `codex_status` and
+`codex_list` still show the prompt you actually wrote.
 
 ## Writing good job prompts
 

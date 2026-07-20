@@ -4,7 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveCodexBin } from "./codexBin.js";
-import { captureBaseline, HANDOFF_SCHEMA, type GitBaseline } from "./handoff.js";
+import {
+  captureBaseline,
+  composePrompt,
+  HANDOFF_SCHEMA,
+  shouldDocument,
+  type GitBaseline,
+} from "./handoff.js";
 
 export type JobState = "running" | "done" | "failed" | "cancelled";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -40,6 +46,8 @@ export interface JobMeta {
   /** Per-job override; omitted means whatever config.toml sets. */
   reasoningEffort?: ReasoningEffort;
   routing?: JobRouting;
+  /** Whether the documentation instruction was appended to this job's prompt. */
+  documented?: boolean;
   pid: number;
   state: JobState;
   startedAt: number;
@@ -189,6 +197,8 @@ export interface StartOptions {
   reasoningEffort?: ReasoningEffort;
   /** Recorded verbatim; selection happens at the tool boundary, not here. */
   routing?: JobRouting;
+  /** Ask the job to document itself. Defaults on, except under read-only. */
+  documentation?: boolean;
   /** Require a typed handoff report instead of free prose. Defaults to true. */
   structured?: boolean;
 }
@@ -225,22 +235,31 @@ export function startJob(opts: StartOptions): JobMeta {
   for (const d of opts.addDirs ?? []) args.push("--add-dir", path.resolve(d));
   if (structured) args.push("--output-schema", writeSchema(jobId));
 
-  return launch(jobId, args, cwd, {
+  const docOpts = { sandbox, documentation: opts.documentation };
+
+  return launch(
     jobId,
-    prompt: opts.prompt,
+    args,
     cwd,
-    model: opts.model,
-    sandbox,
-    reasoningEffort: opts.reasoningEffort,
-    routing: opts.routing,
-    structured,
-    // Recorded before Codex touches anything, so we can later report what
-    // actually changed rather than what Codex says changed.
-    git: captureBaseline(cwd),
-    pid: -1,
-    state: "running",
-    startedAt: Date.now(),
-  });
+    {
+      jobId,
+      prompt: opts.prompt,
+      cwd,
+      model: opts.model,
+      sandbox,
+      reasoningEffort: opts.reasoningEffort,
+      routing: opts.routing,
+      documented: shouldDocument(docOpts),
+      structured,
+      // Recorded before Codex touches anything, so we can later report what
+      // actually changed rather than what Codex says changed.
+      git: captureBaseline(cwd),
+      pid: -1,
+      state: "running",
+      startedAt: Date.now(),
+    },
+    composePrompt(opts.prompt, docOpts),
+  );
 }
 
 /**
@@ -283,13 +302,22 @@ export function replyJob(
   args.push(...effortArgs(useEffort));
   if (useStructured) args.push("--output-schema", writeSchema(jobId));
 
-  return launch(jobId, args, parent.cwd, {
+  // A follow-up inherits the parent's documentation setting: a correction to
+  // documented work should keep the docs in step with it.
+  const docOpts = { sandbox: parent.sandbox, documentation: parent.documented };
+
+  return launch(
+    jobId,
+    args,
+    parent.cwd,
+    {
     jobId,
     prompt,
     cwd: parent.cwd,
     model: parent.model,
     sandbox: parent.sandbox,
     reasoningEffort: useEffort,
+    documented: shouldDocument(docOpts),
     structured: useStructured,
     threadId,
     parentJobId: parent.jobId,
@@ -297,7 +325,9 @@ export function replyJob(
     pid: -1,
     state: "running",
     startedAt: Date.now(),
-  });
+    },
+    composePrompt(prompt, docOpts),
+  );
 }
 
 function writeSchema(jobId: string): string {
@@ -306,10 +336,19 @@ function writeSchema(jobId: string): string {
   return file;
 }
 
-function launch(jobId: string, args: string[], cwd: string, base: JobMeta): JobMeta {
+function launch(
+  jobId: string,
+  args: string[],
+  cwd: string,
+  base: JobMeta,
+  // What Codex actually receives. Differs from base.prompt when a standing
+  // instruction is appended; meta keeps the caller's text so status output and
+  // job listings show what was asked for, not the machinery around it.
+  promptText: string = base.prompt,
+): JobMeta {
   // The prompt goes in over stdin so no amount of quoting or length can break
   // the command line.
-  fs.writeFileSync(jobFile(jobId, F.prompt), base.prompt, "utf8");
+  fs.writeFileSync(jobFile(jobId, F.prompt), promptText, "utf8");
 
   const stdinFd = fs.openSync(jobFile(jobId, F.prompt), "r");
   const outFd = fs.openSync(jobFile(jobId, F.events), "a");

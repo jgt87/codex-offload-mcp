@@ -110,6 +110,16 @@ server.registerTool(
           `Pin the model instead of letting it be chosen from the task. Available: ${modelMenu()}. ` +
             "Omit to let routing pick one.",
         ),
+      documentation: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default true for jobs that can write: Codex is asked to update the project's existing " +
+            "documentation when the change alters behaviour, adds a feature, or makes an existing " +
+            "statement untrue, and to report what it touched. It is told to edit existing docs " +
+            "rather than invent a changelog, and to skip when the change does not warrant any. " +
+            "Set false to suppress the instruction. Always off under read-only, which cannot write.",
+        ),
       autoRoute: z
         .boolean()
         .optional()
@@ -147,7 +157,17 @@ server.registerTool(
         ),
     },
   },
-  async ({ prompt, cwd, model, sandbox, addDirs, structured, reasoningEffort, autoRoute }) => {
+  async ({
+    prompt,
+    cwd,
+    model,
+    sandbox,
+    addDirs,
+    structured,
+    reasoningEffort,
+    autoRoute,
+    documentation,
+  }) => {
     try {
       const chosen = route(MODEL_INDEX, { prompt, model, reasoningEffort, autoRoute });
 
@@ -176,6 +196,7 @@ server.registerTool(
         model: chosen.model,
         reasoningEffort: chosen.reasoningEffort,
         routing: { tier: chosen.tier, rationale: chosen.rationale, auto: chosen.auto },
+        documentation,
       });
       return text({
         ...brief(meta),
