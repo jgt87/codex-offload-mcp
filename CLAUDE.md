@@ -14,10 +14,20 @@ finishes, it belongs in the built-in server instead, not this one.
 ```sh
 npm run build     # tsc -> dist/
 npm run watch     # tsc --watch
+npm test          # build, then node --test test/*.test.js
 ```
 
-There is no test runner. Verify changes by driving the built server over stdio with a JSON-RPC
-script (initialize → `notifications/initialized` → `tools/call`); see "Verifying changes" below.
+Tests run against the **compiled** `dist/` output, not the TypeScript sources, which is why `npm
+test` builds first. They cover `handoff.ts` git parsing and `jobs.ts` state reconciliation; the
+spawn path in `startJob` / `replyJob` is deliberately not covered, since exercising it needs either
+real Codex runs or a fake binary that Windows cannot spawn without a shell. Verify that path by
+driving the built server over stdio with a JSON-RPC script (initialize →
+`notifications/initialized` → `tools/call`); see "Verifying changes" below.
+
+`test/jobs.test.js` sets `CODEX_MCP_JOBS_DIR` to a temp dir **before** a dynamic `import()` of the
+compiled module. `JOBS_DIR` is a module-level const evaluated at import time, so a static import
+would aim the tests at the real job store in the user's home directory — where `pruneJobs` would
+delete from it. Keep any new job test on that same dynamic-import pattern.
 
 Registered with Claude Code at user scope as `codex-offload`. After `npm run build`, restart the
 MCP connection for changes to take effect — a running server keeps the old `dist/`.
