@@ -137,8 +137,18 @@ Verified against codex-cli 0.144.4:
 - `--output-schema FILE` constrains the final message to a JSON Schema. Every property must be
   listed in `required` with `additionalProperties: false`; partially-specified objects are rejected.
 - `codex exec resume <SESSION_ID>` continues a thread with full context. It accepts `--json`, `-o`,
-  `--output-schema`, `-m` — but **not** `-C` or `-s`, which it inherits from the original session.
-  The session id is the `thread_id` from the `thread.started` event.
+  `--output-schema`, `-m`, `-c` — but **not** `-C` or `-s`, which it inherits from the original
+  session. The session id is the `thread_id` from the `thread.started` event.
+- `-c model_reasoning_effort=<value>` sets reasoning effort for one run without touching
+  `config.toml`. **Which values are legal depends on the model, not the CLI.** The generic API error
+  advertises `none|minimal|low|medium|high|xhigh|max`, but `gpt-5.6-sol` accepts only
+  `none|low|medium|high|xhigh` and rejects `minimal` and `max`. Codex does not validate locally — it
+  forwards the value, so a bad one surfaces as an `error` + `turn.failed` event *after* the job has
+  started, not as a spawn error. The zod enum at the tool boundary therefore catches typos only; it
+  cannot promise a value will work.
+- A failed turn's real cause is in `events.jsonl`, not `stderr.log`. stderr routinely leads with an
+  unrelated `codex_models_manager::cache` warning, so prefer `summarizeEvents().failure` over a tail
+  of stderr when reporting why a job failed.
 - The real binary is at
   `<npm-root>/@openai/codex/node_modules/@openai/codex-<platform>/vendor/<triple>/bin/codex[.exe]`.
 - On Windows the `codex.cmd` shim cannot be spawned without `shell: true` (Node throws `EINVAL`).

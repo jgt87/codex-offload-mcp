@@ -20,6 +20,14 @@ import { diffSinceBaseline, parseReport } from "./handoff.js";
 
 const SANDBOX = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 
+// Codex forwards this value without checking it, so a bad one is only caught by
+// the API once the job is already running. Validating here turns a typo into an
+// immediate error instead of a wasted dispatch — but it can only ever catch
+// typos: which values are legal depends on the model, not on this list.
+// gpt-5.6-sol, for instance, rejects "minimal" and "max" while accepting the
+// rest, and that rejection surfaces as a failed turn rather than a start error.
+const REASONING = z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
 function text(payload: unknown) {
   return {
     content: [
@@ -48,6 +56,7 @@ function brief(meta: JobMeta) {
     model: meta.model ?? "(codex default)",
     sandbox: meta.sandbox,
     prompt: meta.prompt.length > 160 ? `${meta.prompt.slice(0, 160)}…` : meta.prompt,
+    ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
     ...(meta.parentJobId ? { parentJobId: meta.parentJobId } : {}),
   };
 }
@@ -78,6 +87,17 @@ server.registerTool(
         .string()
         .describe("Absolute path to the directory Codex should treat as its working root."),
       model: z.string().optional().describe("Model override, e.g. 'gpt-5-codex'. Omit for the Codex default."),
+      reasoningEffort: REASONING.optional().describe(
+        "How hard the model should think, overriding your Codex config for this job only. Match it " +
+          "to the task: 'low' for mechanical work where the answer is obvious and the cost is " +
+          "typing (renames, moving files, applying a stated pattern); 'medium' for ordinary " +
+          "implementation; 'high' or 'xhigh' for genuinely hard reasoning — tricky concurrency, " +
+          "subtle logic, design decisions with real trade-offs. Higher settings cost more and take " +
+          "longer, so raising it for simple work buys nothing. Note that accepted values vary by " +
+          "model: 'none', 'low', 'medium', 'high' and 'xhigh' are widely supported, while 'minimal' " +
+          "and 'max' are rejected by some models and will fail the job on its first API call. " +
+          "Omit to inherit the config default.",
+      ),
       sandbox: SANDBOX.optional().describe(
         "read-only = cannot modify anything; workspace-write (default) = may edit files under cwd; " +
           "danger-full-access = unrestricted, avoid unless the caller explicitly asked for it.",
@@ -96,9 +116,9 @@ server.registerTool(
         ),
     },
   },
-  async ({ prompt, cwd, model, sandbox, addDirs, structured }) => {
+  async ({ prompt, cwd, model, sandbox, addDirs, structured, reasoningEffort }) => {
     try {
-      const meta = startJob({ prompt, cwd, model, sandbox, addDirs, structured });
+      const meta = startJob({ prompt, cwd, model, sandbox, addDirs, structured, reasoningEffort });
       return text({
         ...brief(meta),
         note: "Started in the background. Keep working; check codex_status when you need it.",
@@ -192,7 +212,12 @@ server.registerTool(
       ...(events.usage ? { usage: events.usage } : {}),
       ...(includeActivity ? { activity: events.activity } : {}),
       ...(meta.state !== "done"
-        ? { error: meta.error ?? events.failure, stderr: readStderr(jobId) || undefined }
+        // events.failure is the structured turn.failed reason and names the
+        // actual cause; meta.error is only a tail of stderr, which routinely
+        // leads with unrelated warnings. Fall back to it when a job died
+        // without ever reporting a failed turn. Full stderr is returned below
+        // either way.
+        ? { error: events.failure ?? meta.error, stderr: readStderr(jobId) || undefined }
         : {}),
       nextStep: meta.threadId
         ? "Use codex_reply with this jobId to send corrections or follow-ups — Codex keeps its context."
@@ -218,9 +243,14 @@ server.registerTool(
         .boolean()
         .optional()
         .describe("Whether to require a typed report. Defaults to the parent job's setting."),
+      reasoningEffort: REASONING.optional().describe(
+        "Reasoning effort for this follow-up. Defaults to the parent job's setting. Worth raising " +
+          "when the first attempt got it wrong for want of thinking, and worth lowering when the " +
+          "follow-up is a mechanical fixup of work already done.",
+      ),
     },
   },
-  async ({ jobId, prompt, structured }) => {
+  async ({ jobId, prompt, structured, reasoningEffort }) => {
     const parent = getJob(jobId);
     if (!parent) return notFound(jobId);
     if (parent.state === "running") {
@@ -232,7 +262,7 @@ server.registerTool(
       };
     }
     try {
-      const meta = replyJob(parent, prompt, structured);
+      const meta = replyJob(parent, prompt, structured, reasoningEffort);
       return text({
         ...brief(meta),
         threadId: meta.threadId,

@@ -206,6 +206,31 @@ All of these need to hold:
 Keep it in-process when the task needs conversation context, is fast, blocks the next decision, or
 is surgical enough that specifying it precisely costs more than just doing it.
 
+### Choosing model and effort
+
+`codex_start` takes an optional `model` and `reasoningEffort`, both scoped to the single job and
+neither inferred from the prompt. Complexity is something the caller writing the prompt knows and
+the server can only guess at, so the levers are exposed rather than automated — the same division of
+labour as the offload decision itself.
+
+| Effort | For |
+| --- | --- |
+| `low` | Mechanical work where the answer is obvious and the cost is typing — renames, moving files, applying a pattern you have already specified |
+| `medium` | Ordinary implementation |
+| `high` / `xhigh` | Genuinely hard reasoning — tricky concurrency, subtle logic, design decisions with real trade-offs |
+
+Higher settings cost more and take longer, so raising it for simple work buys nothing. Omit it and
+the job inherits `model_reasoning_effort` from your `~/.codex/config.toml`, which is easy to forget:
+if that is set to `high`, *every* offloaded job runs at `high` until you say otherwise.
+
+**Accepted values vary by model, and the CLI does not check.** `none`, `low`, `medium`, `high` and
+`xhigh` are widely supported; `minimal` and `max` are rejected by some models — `gpt-5.6-sol` among
+them. Codex forwards whatever it is given, so an unsupported value is only caught by the API, and
+the job fails on its first call rather than at dispatch. `codex_result` reports the reason verbatim.
+
+`codex_reply` takes `reasoningEffort` too, defaulting to the parent job's. Worth raising when a first
+attempt failed for want of thinking, and lowering when the follow-up is a mechanical fixup.
+
 **Exploratory work is the main trap.** Investigations where each measurement changes what you look
 at next cannot be offloaded — by the time the prompt can be written, the thinking is already done.
 A useful tell is a wrong hypothesis: if you expect to have one, keep the work in-process.

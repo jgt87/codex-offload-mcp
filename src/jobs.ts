@@ -9,12 +9,33 @@ import { captureBaseline, HANDOFF_SCHEMA, type GitBaseline } from "./handoff.js"
 export type JobState = "running" | "done" | "failed" | "cancelled";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
+/**
+ * Values the API accepts for `reasoning.effort`. Codex does not validate this
+ * locally — it forwards whatever it is given and the request fails server-side
+ * mid-job — so the tool boundary rejects a bad value before a job is spawned.
+ */
+export type ReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+/** `-c` override that sets per-job reasoning effort, leaving config.toml alone. */
+function effortArgs(effort?: ReasoningEffort): string[] {
+  return effort ? ["-c", `model_reasoning_effort=${effort}`] : [];
+}
+
 export interface JobMeta {
   jobId: string;
   prompt: string;
   cwd: string;
   model?: string;
   sandbox: SandboxMode;
+  /** Per-job override; omitted means whatever config.toml sets. */
+  reasoningEffort?: ReasoningEffort;
   pid: number;
   state: JobState;
   startedAt: number;
@@ -160,6 +181,8 @@ export interface StartOptions {
   sandbox?: SandboxMode;
   /** Extra directories Codex may write to, beyond cwd. */
   addDirs?: string[];
+  /** Per-job reasoning effort. Omit to inherit the Codex config default. */
+  reasoningEffort?: ReasoningEffort;
   /** Require a typed handoff report instead of free prose. Defaults to true. */
   structured?: boolean;
 }
@@ -192,6 +215,7 @@ export function startJob(opts: StartOptions): JobMeta {
     jobFile(jobId, F.result),
   ];
   if (opts.model) args.push("-m", opts.model);
+  args.push(...effortArgs(opts.reasoningEffort));
   for (const d of opts.addDirs ?? []) args.push("--add-dir", path.resolve(d));
   if (structured) args.push("--output-schema", writeSchema(jobId));
 
@@ -201,6 +225,7 @@ export function startJob(opts: StartOptions): JobMeta {
     cwd,
     model: opts.model,
     sandbox,
+    reasoningEffort: opts.reasoningEffort,
     structured,
     // Recorded before Codex touches anything, so we can later report what
     // actually changed rather than what Codex says changed.
@@ -218,7 +243,12 @@ export function startJob(opts: StartOptions): JobMeta {
  * `codex exec resume` does not accept -C or -s; the resumed session reuses the
  * working directory and sandbox it was originally started with.
  */
-export function replyJob(parent: JobMeta, prompt: string, structured?: boolean): JobMeta {
+export function replyJob(
+  parent: JobMeta,
+  prompt: string,
+  structured?: boolean,
+  reasoningEffort?: ReasoningEffort,
+): JobMeta {
   const threadId = parent.threadId ?? getThreadId(parent.jobId);
   if (!threadId) {
     throw new Error(
@@ -239,7 +269,11 @@ export function replyJob(parent: JobMeta, prompt: string, structured?: boolean):
     "-o",
     jobFile(jobId, F.result),
   ];
+  // `exec resume` takes -m and -c (though not -C or -s), so effort is settable
+  // on a follow-up; unset means inherit whatever the parent job ran with.
+  const useEffort = reasoningEffort ?? parent.reasoningEffort;
   if (parent.model) args.push("-m", parent.model);
+  args.push(...effortArgs(useEffort));
   if (useStructured) args.push("--output-schema", writeSchema(jobId));
 
   return launch(jobId, args, parent.cwd, {
@@ -248,6 +282,7 @@ export function replyJob(parent: JobMeta, prompt: string, structured?: boolean):
     cwd: parent.cwd,
     model: parent.model,
     sandbox: parent.sandbox,
+    reasoningEffort: useEffort,
     structured: useStructured,
     threadId,
     parentJobId: parent.jobId,
