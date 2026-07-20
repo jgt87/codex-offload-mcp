@@ -75,6 +75,46 @@ claude mcp add codex-offload --scope user -- node /absolute/path/to/dist/index.j
 
 Requires the `codex` CLI installed and authenticated (`codex login`).
 
+MCP servers connect when a session starts, so after installing — or after any `npm run build` —
+restart Claude Code before the changes take effect. Confirm the tools loaded with `/mcp` in-session
+or `claude mcp list` from a shell; you should see `codex-offload` and its six tools.
+
+## Using it
+
+You do not call the tools by name. Ask for what you want and Claude selects them:
+
+| You say | Tool |
+| --- | --- |
+| "Offload to Codex: migrate the auth module to the new API" | `codex_start` → jobId, immediately |
+| "How's that Codex job doing?" | `codex_status` |
+| "Get the Codex result" | `codex_result` |
+| "Tell Codex it missed the error path" | `codex_reply` |
+| "What Codex jobs are running?" | `codex_list` |
+| "Kill that job" | `codex_cancel` |
+
+The pattern worth building a habit around is dispatch-then-continue: *"Offload the test migration
+to Codex, and while that runs, walk me through the router."*
+
+### Three things that will bite you
+
+**Codex starts cold.** It cannot see your conversation with Claude, so "do the thing we discussed"
+produces nothing useful. State what to change, which files, the constraints, and what done looks
+like.
+
+**It edits your files.** The default sandbox is `workspace-write`. Commit or stash first so the
+diff is reviewable, and re-read files afterwards rather than trusting context from before the job.
+Ask for read-only when you only want analysis.
+
+**It is not free.** A substantial job runs a few hundred thousand input tokens. Worth it for a
+refactor; wasteful for anything you would answer inline.
+
+### Checking its work
+
+`codex_result` gives you Codex's own report *and* `actualChanges` from git. When they disagree,
+git wins. For anything that matters, go further than reading the report: run the tests, and break
+the thing under test to confirm they actually fail. A suite that passes proves less than a suite
+you have watched fail for the right reason.
+
 ## How it works
 
 Each job spawns `codex exec --json` as a **detached** process, with:
