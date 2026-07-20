@@ -7,17 +7,13 @@ An MCP server that lets Claude hand coding tasks to the [Codex CLI](https://gith
 
 ## Why this exists
 
-Codex already ships an MCP server — `codex mcp-server` — with `codex` and `codex-reply` tools.
-Those are good, but they are **synchronous**: the tool call blocks until Codex finishes. A
-fifteen-minute refactor means a fifteen-minute blocked call, and most MCP clients time out long
-before that.
+A long Codex run and a chat turn do not fit together. A fifteen-minute refactor asked for
+synchronously means a fifteen-minute blocked call, and most MCP clients time out long before that —
+so the work either gets abandoned or never gets delegated in the first place.
 
-This server fills that gap. The two work well side by side:
-
-| Need | Use |
-| --- | --- |
-| A quick answer, right now | built-in `codex` tool (`codex mcp-server`) |
-| Slow work you want to offload | `codex_start` here |
+This server decouples the two. Dispatch returns a job id in about a second, the work continues in a
+detached process that outlives even this server, and you collect the result whenever it suits. The
+job is checked against git when you do, so what comes back is verifiable rather than merely claimed.
 
 ## Tools
 
@@ -27,6 +23,7 @@ This server fills that gap. The two work well side by side:
 | `codex_status` | State, elapsed time, commands run, files touched, recent activity |
 | `codex_result` | Structured handoff report + git-verified changes; progress if still running |
 | `codex_reply` | Continues a job's Codex thread with a follow-up; returns a new jobId |
+| `codex_models` | Available models and the reasoning efforts each one accepts |
 | `codex_cancel` | Kills the job and its child processes |
 | `codex_list` | Known jobs, newest first, optionally filtered by state |
 
@@ -116,7 +113,7 @@ Configuration** and put the same `servers` block in `.vscode/mcp.json`. That fil
 which gives everyone on the repo the same tools.
 
 **Verify.** Open the Chat view, switch to **Agent** mode, click **Configure Tools**, and confirm the
-six `codex_*` tools appear and are enabled. **MCP: List Servers** shows the server's status and its
+`codex_*` tools appear and are enabled. **MCP: List Servers** shows the server's status and its
 logs if it failed to start.
 
 ### Add to Claude Code
@@ -150,6 +147,7 @@ You do not call the tools by name. Ask for what you want and Claude selects them
 | "Get the Codex result" | `codex_result` |
 | "Tell Codex it missed the error path" | `codex_reply` |
 | "What Codex jobs are running?" | `codex_list` |
+| "Which models can Codex use?" | `codex_models` |
 | "Kill that job" | `codex_cancel` |
 
 The pattern worth building a habit around is dispatch-then-continue: *"Offload the test migration
@@ -399,16 +397,19 @@ is a signal to change the keyword lists, and it is meant to be done by hand.
 1. **Baseline.** `codex_start` records the state of `cwd` before Codex touches anything: the current
    commit, plus the set of files already dirty. This is what makes the later verification honest —
    files you had already modified are flagged `preexisting` rather than blamed on Codex.
-2. **Dispatch.** The prompt is written to `prompt.txt` and `codex exec --json` is spawned
+2. **Routing.** Unless you pinned them, model and reasoning effort are chosen from the task text and
+   clamped to what that model accepts. An effort the model cannot take is rejected here, before
+   anything is spawned.
+3. **Dispatch.** The prompt is written to `prompt.txt` and `codex exec --json` is spawned
    **detached**, with the prompt fed over stdin. The call returns a job id immediately; nothing
    blocks, ever.
-3. **Streaming.** Codex writes JSONL events to `events.jsonl` as it works, and its final answer to
+4. **Streaming.** Codex writes JSONL events to `events.jsonl` as it works, and its final answer to
    `last-message.txt`. Both are on disk, not in memory.
-4. **Polling.** `codex_status` parses the tail of the event stream into a progress view — commands
+5. **Polling.** `codex_status` parses the tail of the event stream into a progress view — commands
    run, files touched, recent activity. It reports; it never waits.
-5. **Collection.** `codex_result` returns Codex's structured report *and* re-diffs the repo against
+6. **Collection.** `codex_result` returns Codex's structured report *and* re-diffs the repo against
    the baseline from step 1 to produce `actualChanges`. Two independent accounts of the same work.
-6. **Follow-up.** `codex_reply` resumes the original Codex thread by its `thread_id`, so a
+7. **Follow-up.** `codex_reply` resumes the original Codex thread by its `thread_id`, so a
    correction lands with all of Codex's context intact rather than starting cold.
 
 ### Under the hood

@@ -5,9 +5,9 @@
 An MCP server that offloads coding tasks to the Codex CLI as background jobs. Claude calls
 `codex_start`, gets a job id back immediately, keeps working, and collects the result later.
 
-The point of the whole project is **non-blocking delegation**. Codex's own `codex mcp-server`
-already covers the synchronous case; if a change here would make a tool block until Codex
-finishes, it belongs in the built-in server instead, not this one.
+The point of the whole project is **non-blocking delegation**. If a change here would make a tool
+block until Codex finishes, it does not belong in this server — returning the job id *is* the
+product, and a blocking tool quietly removes the only reason this exists.
 
 ## When to offload
 

@@ -87,8 +87,8 @@ server.registerTool(
       "(refactors, migrations, test writing, bulk edits across files). Codex edits files on disk " +
       "directly in `cwd`, so treat the working tree as modified once the job finishes. " +
       "Poll with codex_status and collect the answer with codex_result. " +
-      "For a quick question where you need the answer right now, prefer the built-in `codex` tool " +
-      "(from `codex mcp-server`), which blocks until it is done. " +
+      "This is the wrong tool for a quick question you need answered right now — it returns a job " +
+      "id, not an answer, so anything you could resolve inline should be resolved inline. " +
       "Model and reasoning effort are chosen automatically from the task text unless you set them; " +
       "the choice and its reasoning come back in the response, and setting either one explicitly " +
       "overrides it. Call codex_models to see what is available.",
