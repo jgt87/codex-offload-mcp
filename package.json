@@ -22,6 +22,18 @@
     "claude"
   ],
   "license": "MIT",
+  "author": "JGT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jgt87/codex-offload-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jgt87/codex-offload-mcp/issues"
+  },
+  "homepage": "https://github.com/jgt87/codex-offload-mcp#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.25.76"
