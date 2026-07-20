@@ -9,6 +9,53 @@ The point of the whole project is **non-blocking delegation**. Codex's own `code
 already covers the synchronous case; if a change here would make a tool block until Codex
 finishes, it belongs in the built-in server instead, not this one.
 
+## When to offload
+
+**There is no orchestrator.** Nothing in this repo decides what gets delegated. There is no
+router, no scheduler, no heuristic — the only thing steering the choice is the `codex_start`
+description in `src/index.ts`, which the calling model reads at call time and judges against.
+Everything below is that judgment written down, not behaviour the code enforces.
+
+Offload when *all* of these hold:
+
+- **Self-contained.** The task fits in a prompt. Codex cannot see the conversation, so anything
+  depending on what was just worked out must be restated in full. If restating it is most of the
+  work, offloading is a net loss.
+- **Slow.** Minutes, not seconds. Below ~30s the round trip costs more than it saves.
+- **There is real work to do meanwhile.** Dispatching and then polling gains nothing and makes the
+  result harder to verify.
+- **Verifiable afterwards.** Mechanical enough that `actualChanges` from git shows whether it went
+  right.
+- **Scoped to one `cwd`.** Codex writes to disk directly; ambiguous scope means unwanted edits.
+
+Do it in-process when the task needs conversation context, is fast, is exploratory (direction
+changes based on what each step finds), blocks the next decision, or is surgical enough that
+specifying it precisely costs more than doing it.
+
+**Exploratory work is the main trap.** Investigations where each measurement changes what you look
+at next cannot be offloaded: by the time the prompt can be written, the thinking is done. A useful
+tell is a wrong hypothesis — if you expect to have one, keep the work in-process.
+
+Misjudging is asymmetric: a bad delegation writes files to disk. That asymmetry is why
+`codex_result` checks Codex's self-report against git rather than trusting it — the design already
+assumes a delegation can be wrong. Prefer `sandbox: "read-only"` for anything analytical.
+
+### Policies
+
+Standing rules that override the judgment above. The list is empty by design — the default is
+model judgment, and each entry is a deliberate narrowing of it. Append here rather than editing
+the prose above, so the default and the exceptions stay separable.
+
+Format: one bullet per rule, imperative, with the reason on the same line — the reason is what lets
+a later reader tell a still-valid rule from a stale one.
+
+<!-- Example of the intended shape (not an active rule):
+- Never offload anything touching `src/jobs.ts` — process lifecycle changes need live verification,
+  and a git diff cannot show that a job still survives its server.
+-->
+
+- _(none yet)_
+
 ## Commands
 
 ```sh
