@@ -1,19 +1,29 @@
 # codex-offload-mcp
 
-An MCP server that lets Claude hand coding tasks to the [Codex CLI](https://github.com/openai/codex) as **background jobs**.
+An MCP server for running Claude Code and the [Codex CLI](https://github.com/openai/codex) as a
+pair: Claude drives, and hands self-contained tasks to Codex as **background jobs**.
 
-`codex_start` returns a job id immediately instead of blocking, so Claude can dispatch slow work
-(refactors, migrations, test suites) and carry on while Codex grinds through it.
+`codex_start` returns a job id immediately instead of blocking, so the driving model keeps working
+while Codex works alongside it — two agents on the problem at once, rather than one waiting on the
+other.
 
 ## Why this exists
 
-A long Codex run and a chat turn do not fit together. A fifteen-minute refactor asked for
-synchronously means a fifteen-minute blocked call, and most MCP clients time out long before that —
-so the work either gets abandoned or never gets delegated in the first place.
+To use two coding models together rather than one at a time. Claude Code holds the conversation,
+the context and the judgment about what to do next; Codex is a capable second agent that can be
+given a well-specified piece of work and left to get on with it. Neither replaces the other, and
+the interesting part is what they do concurrently.
 
-This server decouples the two. Dispatch returns a job id in about a second, the work continues in a
-detached process that outlives even this server, and you collect the result whenever it suits. The
-job is checked against git when you do, so what comes back is verifiable rather than merely claimed.
+**Blocking would defeat the entire point.** If handing work to Codex meant waiting for Codex, there
+would be no pair — just one model parked while the other runs, which is strictly worse than doing
+the work yourself. So dispatch returns in about a second and the job continues in a detached process
+that outlives even this server. The driving model carries on reasoning, reading and answering, and
+collects the result when it is ready.
+
+That concurrency is also what makes the delegation worth specifying carefully. Codex cannot see the
+conversation, so a task has to travel as a complete brief — and the work that comes back is checked
+against git rather than taken on trust, because handing work between models is precisely where
+"I did the thing" and "the thing got done" come apart.
 
 ## Tools
 

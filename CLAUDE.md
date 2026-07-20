@@ -2,12 +2,15 @@
 
 ## What this is
 
-An MCP server that offloads coding tasks to the Codex CLI as background jobs. Claude calls
-`codex_start`, gets a job id back immediately, keeps working, and collects the result later.
+An MCP server for running Claude Code and the Codex CLI as a pair: Claude drives and holds the
+conversation, Codex takes self-contained work as background jobs. Claude calls `codex_start`, gets a
+job id back immediately, keeps working, and collects the result later.
 
-The point of the whole project is **non-blocking delegation**. If a change here would make a tool
-block until Codex finishes, it does not belong in this server — returning the job id *is* the
-product, and a blocking tool quietly removes the only reason this exists.
+The point is **two models working concurrently**. Non-blocking delegation is the mechanism that
+makes that possible, not the goal in itself — which matters when weighing a change. If a tool here
+would block until Codex finishes, it does not belong in this server: a blocking call collapses the
+pair back into one model at a time, with the driving model parked, which is the one outcome this
+exists to avoid.
 
 ## When to offload
 
