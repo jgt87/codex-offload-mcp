@@ -1,0 +1,32 @@
+{
+  "name": "codex-offload-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that offloads coding tasks to the Codex CLI as background jobs",
+  "type": "module",
+  "bin": {
+    "codex-offload-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "codex",
+    "claude"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
+  }
+}
