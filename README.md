@@ -153,19 +153,6 @@ You do not call the tools by name. Ask for what you want and Claude selects them
 The pattern worth building a habit around is dispatch-then-continue: *"Offload the test migration
 to Codex, and while that runs, walk me through the router."*
 
-### Three things that will bite you
-
-**Codex starts cold.** It cannot see your conversation with Claude, so "do the thing we discussed"
-produces nothing useful. State what to change, which files, the constraints, and what done looks
-like.
-
-**It edits your files.** The default sandbox is `workspace-write`. Commit or stash first so the
-diff is reviewable, and re-read files afterwards rather than trusting context from before the job.
-Ask for read-only when you only want analysis.
-
-**It is not free.** A substantial job runs a few hundred thousand input tokens. Worth it for a
-refactor; wasteful for anything you would answer inline.
-
 ### Checking its work
 
 `codex_result` gives you Codex's own report *and* `actualChanges` from git. When they disagree,
