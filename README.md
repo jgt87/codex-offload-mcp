@@ -67,17 +67,77 @@ rather than starting a cold job that has to rediscover everything.
 
 ## Install
 
+### Prerequisites
+
+- **Node.js 20+**
+- **The Codex CLI**, installed and authenticated — run `codex login` and confirm `codex --version`
+  works. This server drives that binary; without it every job fails immediately.
+
+### Build
+
 ```sh
+git clone https://github.com/jgt87/codex-offload-mcp.git
+cd codex-offload-mcp
 npm install
 npm run build
+```
+
+This produces `dist/index.js`. Note its **absolute** path — every step below needs it.
+
+### Add to VS Code
+
+MCP support is built into current VS Code; if the Command Palette lists `MCP:` commands, you have
+it. Pick either route:
+
+**Guided.** Command Palette (`Ctrl+Shift+P`) → **MCP: Add Server** → **Command (stdio)**. Enter
+`node` as the command and the absolute path to `dist/index.js` as the argument, then name it
+`codex-offload`.
+
+**By hand.** Command Palette → **MCP: Open User Configuration** to open your user `mcp.json`
+(`%APPDATA%\Code\User\mcp.json` on Windows), and add the server:
+
+```json
+{
+  "servers": {
+    "codex-offload": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["C:/path/to/codex-offload-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+Use forward slashes on Windows, or escape backslashes as `\\` — a raw `C:\path` is invalid JSON and
+the server will silently fail to start.
+
+To scope it to one project instead of your whole profile, use **MCP: Open Workspace Folder
+Configuration** and put the same `servers` block in `.vscode/mcp.json`. That file can be committed,
+which gives everyone on the repo the same tools.
+
+**Verify.** Open the Chat view, switch to **Agent** mode, click **Configure Tools**, and confirm the
+six `codex_*` tools appear and are enabled. **MCP: List Servers** shows the server's status and its
+logs if it failed to start.
+
+### Add to Claude Code
+
+```sh
 claude mcp add codex-offload --scope user -- node /absolute/path/to/dist/index.js
 ```
 
-Requires the `codex` CLI installed and authenticated (`codex login`).
+Confirm with `/mcp` in a session, or `claude mcp list` from a shell.
 
-MCP servers connect when a session starts, so after installing — or after any `npm run build` —
-restart Claude Code before the changes take effect. Confirm the tools loaded with `/mcp` in-session
-or `claude mcp list` from a shell; you should see `codex-offload` and its six tools.
+### After changing the code
+
+A running server keeps serving the old `dist/`, so rebuild **and** restart it:
+
+```sh
+npm run build
+```
+
+- **VS Code** — **MCP: List Servers** → select the server → **Restart**. (The experimental
+  `chat.mcp.autoStart` setting can do this for you.)
+- **Claude Code** — restart the session; MCP servers connect at session start.
 
 ## Using it
 
