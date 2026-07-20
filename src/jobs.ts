@@ -278,6 +278,25 @@ function launch(jobId: string, args: string[], cwd: string, base: JobMeta): JobM
   try {
     child = spawn(bin.command, args, {
       cwd,
+      // Required for the job to outlive this server. On Windows this maps to
+      // DETACHED_PROCESS, which has a measured cost: Codex then has no console,
+      // so each console-mode grandchild it spawns (~20 git probes per job)
+      // allocates a console of its own, and those orphan and never exit.
+      //
+      // How that surfaces depends on the machine's default terminal
+      // application. Set to "Windows Console Host" they are invisible
+      // conhost.exe processes (~10 MB each). Left at the Windows 11 default,
+      // which resolves to Windows Terminal, every one of them opens a *visible
+      // Terminal window* — ~20 new windows per job, all owned by a single
+      // WindowsTerminal.exe, which is what makes this impossible to live with.
+      // Switching the default to Console Host hides the symptom; it does not
+      // stop the leak.
+      //
+      // Dropping this flag on Windows does fix the leak outright, but the job
+      // is then killed the moment this server exits, which defeats the whole
+      // point of the server. Verified both ways. A real fix needs a Job Object
+      // with CREATE_BREAKAWAY_FROM_JOB, which Node cannot express without a
+      // native addon. Do not "optimise" this without re-testing survival.
       detached: true,
       stdio: [stdinFd, outFd, errFd],
       shell: bin.useShell,
