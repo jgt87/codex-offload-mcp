@@ -17,16 +17,29 @@ import {
   type JobMeta,
 } from "./jobs.js";
 import { diffSinceBaseline, parseReport } from "./handoff.js";
+import { findModel, knownEfforts, listedModels, readModelIndex } from "./models.js";
+import { route } from "./route.js";
 
 const SANDBOX = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 
-// Codex forwards this value without checking it, so a bad one is only caught by
-// the API once the job is already running. Validating here turns a typo into an
-// immediate error instead of a wasted dispatch — but it can only ever catch
-// typos: which values are legal depends on the model, not on this list.
-// gpt-5.6-sol, for instance, rejects "minimal" and "max" while accepting the
-// rest, and that rejection surfaces as a failed turn rather than a start error.
-const REASONING = z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+// Read once at startup from Codex's own model index, so models and reasoning
+// levels released after this server was written are picked up without a code
+// change. Restart the server to re-read. Falls back safely when unreadable.
+const MODEL_INDEX = readModelIndex();
+
+// Built from the index rather than hand-written. A hardcoded list was wrong
+// within an hour of being written: it invented "none" and "minimal", which no
+// model advertises, and omitted "ultra", which two models support.
+const REASONING = z.enum(knownEfforts(MODEL_INDEX) as [string, ...string[]]);
+
+/** Compact menu of what is actually available, for tool descriptions. */
+function modelMenu(): string {
+  const listed = listedModels(MODEL_INDEX);
+  if (listed.length === 0) return "(model index unavailable; Codex config defaults apply)";
+  return listed
+    .map((m) => `${m.slug} [${m.efforts.map((e) => e.effort).join("|")}]`)
+    .join("; ");
+}
 
 function text(payload: unknown) {
   return {
@@ -57,6 +70,7 @@ function brief(meta: JobMeta) {
     sandbox: meta.sandbox,
     prompt: meta.prompt.length > 160 ? `${meta.prompt.slice(0, 160)}…` : meta.prompt,
     ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
+    ...(meta.routing ? { routing: meta.routing } : {}),
     ...(meta.parentJobId ? { parentJobId: meta.parentJobId } : {}),
   };
 }
@@ -74,7 +88,10 @@ server.registerTool(
       "directly in `cwd`, so treat the working tree as modified once the job finishes. " +
       "Poll with codex_status and collect the answer with codex_result. " +
       "For a quick question where you need the answer right now, prefer the built-in `codex` tool " +
-      "(from `codex mcp-server`), which blocks until it is done.",
+      "(from `codex mcp-server`), which blocks until it is done. " +
+      "Model and reasoning effort are chosen automatically from the task text unless you set them; " +
+      "the choice and its reasoning come back in the response, and setting either one explicitly " +
+      "overrides it. Call codex_models to see what is available.",
     inputSchema: {
       prompt: z
         .string()
@@ -86,7 +103,21 @@ server.registerTool(
       cwd: z
         .string()
         .describe("Absolute path to the directory Codex should treat as its working root."),
-      model: z.string().optional().describe("Model override, e.g. 'gpt-5-codex'. Omit for the Codex default."),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          `Pin the model instead of letting it be chosen from the task. Available: ${modelMenu()}. ` +
+            "Omit to let routing pick one.",
+        ),
+      autoRoute: z
+        .boolean()
+        .optional()
+        .describe(
+          "Default true. Set false to suppress automatic selection entirely and use only what you " +
+            "pass (or the Codex config defaults) — useful when the keyword heuristic misreads a " +
+            "task and you want no inference at all.",
+        ),
       reasoningEffort: REASONING.optional().describe(
         "How hard the model should think, overriding your Codex config for this job only. Match it " +
           "to the task: 'low' for mechanical work where the answer is obvious and the cost is " +
@@ -116,9 +147,36 @@ server.registerTool(
         ),
     },
   },
-  async ({ prompt, cwd, model, sandbox, addDirs, structured, reasoningEffort }) => {
+  async ({ prompt, cwd, model, sandbox, addDirs, structured, reasoningEffort, autoRoute }) => {
     try {
-      const meta = startJob({ prompt, cwd, model, sandbox, addDirs, structured, reasoningEffort });
+      const chosen = route(MODEL_INDEX, { prompt, model, reasoningEffort, autoRoute });
+
+      // Reject an effort this model cannot take before spawning. Codex forwards
+      // the value unchecked, so otherwise it fails a turn minutes in.
+      const info = chosen.model ? findModel(MODEL_INDEX, chosen.model) : undefined;
+      if (chosen.reasoningEffort && info && info.efforts.length > 0) {
+        const ok = info.efforts.map((e) => e.effort);
+        if (!ok.includes(chosen.reasoningEffort)) {
+          return {
+            ...text(
+              `Model ${chosen.model} does not accept reasoningEffort '${chosen.reasoningEffort}'. ` +
+                `It supports: ${ok.join(", ")}.`,
+            ),
+            isError: true,
+          };
+        }
+      }
+
+      const meta = startJob({
+        prompt,
+        cwd,
+        sandbox,
+        addDirs,
+        structured,
+        model: chosen.model,
+        reasoningEffort: chosen.reasoningEffort,
+        routing: { tier: chosen.tier, rationale: chosen.rationale, auto: chosen.auto },
+      });
       return text({
         ...brief(meta),
         note: "Started in the background. Keep working; check codex_status when you need it.",
@@ -271,6 +329,39 @@ server.registerTool(
     } catch (err) {
       return { ...text(`Failed to start follow-up: ${(err as Error).message}`), isError: true };
     }
+  },
+);
+
+server.registerTool(
+  "codex_models",
+  {
+    title: "List available Codex models",
+    description:
+      "Show the models this Codex install offers and the reasoning efforts each one accepts, read " +
+      "from Codex's own model index. Use it when you want to pin `model` or `reasoningEffort` on " +
+      "codex_start and need to know what is legal — the accepted efforts differ per model, and a " +
+      "value the model does not take fails the job rather than the call. Also reports how the " +
+      "index was obtained, so a stale or missing one is visible rather than silent.",
+    inputSchema: {},
+  },
+  async () => {
+    const listed = listedModels(MODEL_INDEX);
+    return text({
+      source: MODEL_INDEX.source,
+      fetchedAt: MODEL_INDEX.fetchedAt,
+      clientVersion: MODEL_INDEX.clientVersion,
+      ...(MODEL_INDEX.note ? { note: MODEL_INDEX.note } : {}),
+      // Read at startup; restart the server to pick up a newer index.
+      models: listed.map((m) => ({
+        slug: m.slug,
+        description: m.description,
+        defaultEffort: m.defaultEffort,
+        efforts: m.efforts,
+      })),
+      routing:
+        "codex_start picks model and effort from the task text unless you pass them. " +
+        "mechanical -> low, standard -> medium, hard -> high, clamped to what the model supports.",
+    });
   },
 );
 

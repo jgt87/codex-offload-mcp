@@ -11,10 +11,21 @@ finishes, it belongs in the built-in server instead, not this one.
 
 ## When to offload
 
-**There is no orchestrator.** Nothing in this repo decides what gets delegated. There is no
-router, no scheduler, no heuristic — the only thing steering the choice is the `codex_start`
-description in `src/index.ts`, which the calling model reads at call time and judges against.
-Everything below is that judgment written down, not behaviour the code enforces.
+**Nothing here decides *whether* to delegate.** There is no scheduler and no queue — the only thing
+steering that choice is the `codex_start` description in `src/index.ts`, which the calling model
+reads at call time and judges against. Everything below is that judgment written down, not behaviour
+the code enforces.
+
+**Model and effort *are* chosen here**, in `src/route.ts`, and that is the one exception to the
+above. Keep the distinction sharp when editing: routing decides *how* a job runs, never *whether* it
+runs. The facts it routes over — which models exist, which efforts each accepts — are read from
+Codex's own index (`src/models.ts`), so they do not go stale; only the tier judgment is invented,
+and it is a keyword heuristic by choice, since a classifier that called a model would add latency to
+a tool whose entire promise is returning immediately. It is reported in every job's `routing` field
+and overridden by any explicit `model` / `reasoningEffort`, or disabled with `autoRoute: false`.
+A hardcoded effort list was tried first and was wrong within the hour: it invented `none` and
+`minimal`, which no model advertises, and omitted `ultra`, which two models support. Do not
+reintroduce one.
 
 Offload when *all* of these hold:
 
@@ -85,6 +96,8 @@ MCP connection for changes to take effect — a running server keeps the old `di
 - `src/jobs.ts` — job lifecycle: spawn, state reconciliation, event parsing, cancel, prune
 - `src/handoff.ts` — the report schema Codex must fill in, and git-based change verification
 - `src/codexBin.ts` — locates the real Codex executable
+- `src/models.ts` — tolerant reader for Codex's `models_cache.json`; the discovered facts
+- `src/route.ts` — the tier heuristic and tier→model/effort mapping; the invented part
 
 ## Architecture notes
 

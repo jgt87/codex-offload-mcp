@@ -10,18 +10,21 @@ export type JobState = "running" | "done" | "failed" | "cancelled";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 /**
- * Values the API accepts for `reasoning.effort`. Codex does not validate this
- * locally — it forwards whatever it is given and the request fails server-side
- * mid-job — so the tool boundary rejects a bad value before a job is spawned.
+ * Not a fixed union: which efforts exist depends on the model, and new ones
+ * ship without a release here — `ultra` was already live while this project's
+ * first hand-written list did not have it. The legal set is discovered from
+ * Codex's model index at startup and enforced at the tool boundary; see
+ * `models.ts`.
  */
-export type ReasoningEffort =
-  | "none"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
+export type ReasoningEffort = string;
+
+/** How model and effort were arrived at, recorded so a job can be explained later. */
+export interface JobRouting {
+  tier: string;
+  rationale: string;
+  /** False when the caller pinned both values, or disabled routing. */
+  auto: boolean;
+}
 
 /** `-c` override that sets per-job reasoning effort, leaving config.toml alone. */
 function effortArgs(effort?: ReasoningEffort): string[] {
@@ -36,6 +39,7 @@ export interface JobMeta {
   sandbox: SandboxMode;
   /** Per-job override; omitted means whatever config.toml sets. */
   reasoningEffort?: ReasoningEffort;
+  routing?: JobRouting;
   pid: number;
   state: JobState;
   startedAt: number;
@@ -183,6 +187,8 @@ export interface StartOptions {
   addDirs?: string[];
   /** Per-job reasoning effort. Omit to inherit the Codex config default. */
   reasoningEffort?: ReasoningEffort;
+  /** Recorded verbatim; selection happens at the tool boundary, not here. */
+  routing?: JobRouting;
   /** Require a typed handoff report instead of free prose. Defaults to true. */
   structured?: boolean;
 }
@@ -226,6 +232,7 @@ export function startJob(opts: StartOptions): JobMeta {
     model: opts.model,
     sandbox,
     reasoningEffort: opts.reasoningEffort,
+    routing: opts.routing,
     structured,
     // Recorded before Codex touches anything, so we can later report what
     // actually changed rather than what Codex says changed.

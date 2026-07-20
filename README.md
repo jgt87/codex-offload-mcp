@@ -177,19 +177,23 @@ you have watched fail for the right reason.
 
 ## Orchestration
 
-**There is no orchestrator.** Nothing in this server decides what gets delegated. There is no
-router, no scheduler, no heuristic, no queue and no second model triaging work. The only thing
-steering the choice is the `codex_start` tool description, which the calling model reads at call
-time and judges against.
+Two decisions get made per task, and they are handled very differently.
+
+**Whether to delegate is not decided here.** There is no scheduler, no queue and no second model
+triaging work. The only thing steering that choice is the `codex_start` tool description, which the
+calling model reads at call time and judges against.
 
 That is deliberate. The decision needs the one thing this process cannot see — the conversation.
 Whether a task is self-contained, whether there is useful work to do while it runs, whether you are
 about to change your mind about the approach: none of that is visible from inside an MCP server, so
 the judgment stays with the model that has the context, and this server sticks to running the job
-and checking the result.
+and checking the result. Editing that description in `src/index.ts` is how you change delegation
+behaviour; there is no config to tune.
 
-The practical consequence is that **the tool description is the routing logic**. Editing it in
-`src/index.ts` is how you change delegation behaviour; there is no config to tune.
+**Which model and how hard it thinks *are* decided here** — see below. That part is a genuine
+heuristic, and the honest framing is that it is the one invented thing in the pipeline: no API
+reports "this task is mechanical". So it is built to be inspectable rather than trusted. Every job
+records the tier and the reason it was picked, and any explicit value overrides it.
 
 ### What should be offloaded
 
@@ -208,25 +212,50 @@ is surgical enough that specifying it precisely costs more than just doing it.
 
 ### Choosing model and effort
 
-`codex_start` takes an optional `model` and `reasoningEffort`, both scoped to the single job and
-neither inferred from the prompt. Complexity is something the caller writing the prompt knows and
-the server can only guess at, so the levers are exposed rather than automated — the same division of
-labour as the offload decision itself.
+`codex_start` picks both from the task text unless you pass them. The tiers:
 
-| Effort | For |
-| --- | --- |
-| `low` | Mechanical work where the answer is obvious and the cost is typing — renames, moving files, applying a pattern you have already specified |
-| `medium` | Ordinary implementation |
-| `high` / `xhigh` | Genuinely hard reasoning — tricky concurrency, subtle logic, design decisions with real trade-offs |
+| Tier | Signals | Effort | Model |
+| --- | --- | --- | --- |
+| `mechanical` | renames, moving files, formatting, typos, applying a stated pattern | `low` | the one described as fast/affordable |
+| `standard` | anything without a strong signal — the default | `medium` | the one described as balanced/everyday |
+| `hard` | concurrency, races, deadlocks, leaks, security, architecture, trade-offs, root-cause work | `high` | the one described as frontier |
 
-Higher settings cost more and take longer, so raising it for simple work buys nothing. Omit it and
-the job inherits `model_reasoning_effort` from your `~/.codex/config.toml`, which is easy to forget:
-if that is set to `high`, *every* offloaded job runs at `high` until you say otherwise.
+A prompt matching both `mechanical` and `hard` is treated as `hard`: under-thinking a subtle problem
+costs more than over-thinking a simple one.
 
-**Accepted values vary by model, and the CLI does not check.** `none`, `low`, `medium`, `high` and
-`xhigh` are widely supported; `minimal` and `max` are rejected by some models — `gpt-5.6-sol` among
-them. Codex forwards whatever it is given, so an unsupported value is only caught by the API, and
-the job fails on its first call rather than at dispatch. `codex_result` reports the reason verbatim.
+**The model lineup is discovered, not hardcoded.** Models and their accepted effort levels are read
+at startup from Codex's own index (`~/.codex/models_cache.json`), so a model released after this
+server was written is picked up on restart. Tiers map onto that lineup by matching the vendor's own
+descriptions, which means a renamed model still routes sensibly. `codex_models` shows what was
+found, including whether the index was actually readable.
+
+This matters more than it sounds. The first version of this feature hardcoded the effort list, and
+it was wrong within the hour — it invented `none` and `minimal`, which no model advertises, and
+omitted `ultra`, which two models support.
+
+**Effort is clamped to what the chosen model accepts**, so a model topping out at `xhigh` never
+receives `ultra`. If you pin a model *and* an effort it cannot take, the call fails immediately with
+the model's real list — rather than failing the job minutes later, which is what Codex does on its
+own, since it forwards the value unchecked.
+
+**Overriding.** An explicit `model` or `reasoningEffort` always wins, and partial pinning works —
+fix the model, let the effort be routed, or the reverse. `autoRoute: false` disables inference
+entirely and falls back to your `~/.codex/config.toml` defaults. Worth knowing that if that file
+sets `model_reasoning_effort = "high"`, every un-routed job runs at `high` until you say otherwise.
+
+Every job records what was chosen and why:
+
+```json
+"routing": {
+  "tier": "mechanical",
+  "rationale": "classified as mechanical — matched mechanical wording (rename); model gpt-5.6-luna chosen for this tier; effort low",
+  "auto": true
+}
+```
+
+The classifier is keyword matching, and deliberately so — a cleverer one would need a model call,
+which would add latency to a tool whose whole promise is returning immediately. It will misread
+things. That is why it explains itself and why every part of it can be overridden.
 
 `codex_reply` takes `reasoningEffort` too, defaulting to the parent job's. Worth raising when a first
 attempt failed for want of thinking, and lowering when the follow-up is a mechanical fixup.
