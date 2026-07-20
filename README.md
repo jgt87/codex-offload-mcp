@@ -210,9 +210,57 @@ All of these need to hold:
 Keep it in-process when the task needs conversation context, is fast, blocks the next decision, or
 is surgical enough that specifying it precisely costs more than just doing it.
 
+**Exploratory work is the main trap.** Investigations where each measurement changes what you look
+at next cannot be offloaded — by the time the prompt can be written, the thinking is already done.
+A useful tell is a wrong hypothesis: if you expect to have one, keep the work in-process.
+
+**Misjudging is asymmetric.** A bad question wastes a minute; a bad delegation writes files to disk.
+That asymmetry is why `codex_result` checks Codex's self-report against git instead of trusting it —
+the design already assumes a delegation can be wrong. Prefer `sandbox: "read-only"` for anything
+analytical.
+
 ### Choosing model and effort
 
-`codex_start` picks both from the task text unless you pass them. The tiers:
+`codex_start` picks both from the task text unless you pass them. Here is the whole path a call
+takes, from prompt to spawned process:
+
+```
+codex_start(prompt, model?, reasoningEffort?, autoRoute?)
+   │
+   ├── autoRoute: false ────────────────────► skip everything below
+   │                                          (caller's values, else config.toml)
+   ▼
+classify(prompt)                              src/route.ts — keyword match, no model call
+   │
+   ├── matches HARD patterns?      ── yes ──► tier = hard
+   ├── matches MECHANICAL patterns? ─ yes ──► tier = mechanical
+   └── neither ─────────────────────────────► tier = standard          (hard wins ties)
+   │
+   ▼
+pick model            match tier's wording against each model's vendor description
+   │                  ("frontier" / "balanced" / "fast, affordable")
+   │                  no match → Codex's own first-ranked model
+   ▼
+pick effort           mechanical → low   standard → medium   hard → high
+   │
+   ▼
+clamp to model        effort not in this model's supported list?
+   │                  → nearest supported level at or below it
+   ▼
+apply overrides       explicit model / reasoningEffort replace whatever was chosen
+   │
+   ▼
+validate              model accepts this effort?
+   │                        │
+   │                        └── no ──► error returned in ms, nothing spawned
+   ▼
+spawn `codex exec --json` detached, recording {tier, rationale, auto} on the job
+```
+
+Only the `classify` step is invented. Everything from "pick model" down is driven by the model index
+Codex itself maintains, so the lineup and the legal effort levels are facts rather than guesses.
+
+The tiers:
 
 | Tier | Signals | Effort | Model |
 | --- | --- | --- | --- |
@@ -222,6 +270,29 @@ is surgical enough that specifying it precisely costs more than just doing it.
 
 A prompt matching both `mechanical` and `hard` is treated as `hard`: under-thinking a subtle problem
 costs more than over-thinking a simple one.
+
+Resolved against a real lineup, the assignment looks like this — the model column is whatever the
+index currently offers, not a fixed list:
+
+```
+  TASK                                         TIER          MODEL            EFFORT
+  ───────────────────────────────────────────  ────────────  ───────────────  ──────
+  "Rename getUser to fetchUser across the      mechanical    gpt-5.6-luna     low
+   repo and update the call sites"             │             fast, affordable
+                                               └─ matched: "rename"
+
+  "Add an endpoint returning the current       standard      gpt-5.6-terra    medium
+   user's projects"                            │             balanced/everyday
+                                               └─ no strong signal → default
+
+  "Fix the race condition in the job           hard          gpt-5.6-sol      high
+   scheduler that drops events under load"     │             frontier
+                                               └─ matched: "race condition"
+
+  "Rename the lock helper while fixing the     hard          gpt-5.6-sol      high
+   deadlock it causes"                         │
+                                               └─ matched both; hard wins
+```
 
 **The model lineup is discovered, not hardcoded.** Models and their accepted effort levels are read
 at startup from Codex's own index (`~/.codex/models_cache.json`), so a model released after this
@@ -260,14 +331,66 @@ things. That is why it explains itself and why every part of it can be overridde
 `codex_reply` takes `reasoningEffort` too, defaulting to the parent job's. Worth raising when a first
 attempt failed for want of thinking, and lowering when the follow-up is a mechanical fixup.
 
-**Exploratory work is the main trap.** Investigations where each measurement changes what you look
-at next cannot be offloaded — by the time the prompt can be written, the thinking is already done.
-A useful tell is a wrong hypothesis: if you expect to have one, keep the work in-process.
+### The feedback loop
 
-**Misjudging is asymmetric.** A bad question wastes a minute; a bad delegation writes files to disk.
-That asymmetry is why `codex_result` checks Codex's self-report against git instead of trusting it —
-the design already assumes a delegation can be wrong. Prefer `sandbox: "read-only"` for anything
-analytical.
+Work does not come back trusted. Every job produces two independent accounts of itself, and the loop
+closes by comparing them:
+
+```
+  codex_start
+      │    git baseline captured first: current commit + already-dirty files
+      ▼
+  codex exec --json   (detached — outlives this server)
+      │    streams events.jsonl while it works
+      ▼
+  codex_status  ──  poll as often as you like; never blocks
+      │
+      ▼
+  codex_result
+      │
+      ├───────────────────────────┐
+      ▼                           ▼
+  Codex's report             actualChanges
+  what it believes it did    what git says changed,
+  summary, verification,     measured against the
+  confidence                 baseline above; files
+      │                      already dirty flagged
+      │                      preexisting
+      │                           │
+      └─────────────┬─────────────┘
+                    ▼
+           caller compares them   ── git wins any disagreement
+                    │
+         ┌──────────┴───────────┐
+         ▼                      ▼
+   agree, tests pass      disagree, or partial
+         │                      │
+         ▼                      ▼
+      accept              codex_reply
+                                │
+                                ▼
+                 new job on the SAME Codex thread
+                 full context retained, effort adjustable
+                                │
+                                └──►  back to codex_status, above
+```
+
+Three properties make this worth the machinery:
+
+**The two accounts are produced independently.** The report is what Codex says; `actualChanges` is
+computed by diffing the repo against the baseline captured *before* the job started. Files you had
+already modified are flagged `preexisting`, so they are never mistaken for Codex's work. When the two
+disagree, git wins.
+
+**The correction path keeps context.** `codex_reply` resumes the original thread by its `thread_id`,
+so "you missed the error path" lands with everything Codex already knows, instead of a cold job that
+has to rediscover the codebase.
+
+**The loop is closed by you, not by the router.** Nothing here learns. A job records its tier and
+rationale so you can look back and see whether the classification was reasonable, but a misrouted
+task does not adjust anything for next time — you pin `model` or `reasoningEffort` on the retry, or
+edit the patterns in `src/route.ts`. If routing keeps getting a particular kind of task wrong, that
+is a signal to change the keyword lists, and it is meant to be done by hand.
 
 ## How it works
 
