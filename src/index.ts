@@ -83,12 +83,18 @@ server.registerTool(
     title: "Start a Codex job",
     description:
       "Hand a coding task to the Codex CLI and get a jobId back immediately — Codex runs in the " +
-      "background while you keep working. Use this for work that is self-contained and slow " +
-      "(refactors, migrations, test writing, bulk edits across files). Codex edits files on disk " +
-      "directly in `cwd`, so treat the working tree as modified once the job finishes. " +
+      "background while you keep working. Two reasons to reach for it. One: the task is " +
+      "self-contained and slow (refactors, migrations, test writing, bulk edits across files), so " +
+      "running it in the background buys concurrency. Two: the task is self-contained and " +
+      "output-heavy (generating a lot of code, tests, or boilerplate), so letting Codex produce " +
+      "those tokens conserves your own usage — this reason holds even when the task is fast, " +
+      "because you and Codex bill separately. Codex edits files on disk directly in `cwd`, so " +
+      "treat the working tree as modified once the job finishes. " +
       "Poll with codex_status and collect the answer with codex_result. " +
-      "This is the wrong tool for a quick question you need answered right now — it returns a job " +
-      "id, not an answer, so anything you could resolve inline should be resolved inline. " +
+      "Still the wrong tool for a quick question you need answered right now, and for trivial " +
+      "triage or classification (relevance filtering, labelling, risky-or-not) send those to a " +
+      "local model instead — this returns a job id, not an answer, so anything cheaper to resolve " +
+      "another way should be. " +
       "Model and reasoning effort are chosen automatically from the task text unless you set them; " +
       "the choice and its reasoning come back in the response, and setting either one explicitly " +
       "overrides it. Call codex_models to see what is available.",

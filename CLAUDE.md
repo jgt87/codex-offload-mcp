@@ -56,9 +56,9 @@ assumes a delegation can be wrong. Prefer `sandbox: "read-only"` for anything an
 
 ### Policies
 
-Standing rules that override the judgment above. The list is empty by design — the default is
-model judgment, and each entry is a deliberate narrowing of it. Append here rather than editing
-the prose above, so the default and the exceptions stay separable.
+Standing rules that override the judgment above. The default is model judgment, and each entry is
+a deliberate adjustment of it — usually a narrowing, occasionally a broadening. Append here rather
+than editing the prose above, so the default and the exceptions stay separable.
 
 Format: one bullet per rule, imperative, with the reason on the same line — the reason is what lets
 a later reader tell a still-valid rule from a stale one.
@@ -68,7 +68,21 @@ a later reader tell a still-valid rule from a stale one.
   and a git diff cannot show that a job still survives its server.
 -->
 
-- _(none yet)_
+- **Usage arbitrage broadens offload: the "Slow" criterion is waived for output-heavy, specifiable
+  work.** Offload generating a lot of code, tests, or boilerplate to Codex even when it would be
+  fast. Reason: the driving model (Claude) and Codex bill separately, so letting Codex produce the
+  expensive *output* tokens conserves Claude usage for reasoning, conversation, and verification —
+  a saving that does not depend on the task being slow. The other criteria (self-contained,
+  verifiable, single `cwd`, real work meanwhile) still hold; only "Slow" is relaxed. Do not confuse
+  this with offloading *trivial* work — see the next rule — and remember the orchestration itself
+  (writing the prompt, polling, verifying) costs Claude tokens, so the output has to be large enough
+  to clear that overhead.
+- **Trivial triage and classification go to the local model first, never Codex.** Relevance
+  filtering, log/error labelling, "is this diff risky", short yes/no judgements over text → the
+  `local-llm` MCP (`local_classify` / `local_ask`, qwen2.5-coder, runs on Ollama). Reason: it costs
+  zero subscription usage on *either* vendor, and these are precisely the tasks where a wrong answer
+  is cheap to detect — the condition that makes a small local model safe to lean on. Codex is the
+  wrong tier for these: it returns a job id, not an answer, and bills a subscription to do it.
 
 ## Commands
 
