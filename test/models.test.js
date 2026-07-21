@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   readModelIndex,
+  getModelIndex,
   listedModels,
   knownEfforts,
   clampEffort,
@@ -144,4 +145,38 @@ test("clampEffort rises to the lowest supported level when nothing is below", ()
 test("clampEffort passes the target through for a model with no known efforts", () => {
   const idx = readModelIndex(fixture({ models: [{ slug: "bare" }] }));
   assert.equal(clampEffort(findModel(idx, "bare"), "medium"), "medium");
+});
+
+test("getModelIndex re-reads when the cache file changes on disk", () => {
+  // The bug this guards: a long-running server routes to a model Codex has
+  // since dropped, because it read the lineup once at startup.
+  const file = fixture({ models: [{ slug: "old-model" }] });
+
+  const first = getModelIndex(file);
+  assert.deepEqual(first.models.map((m) => m.slug), ["old-model"]);
+
+  // Codex rewrites its cache with a new lineup. Push the mtime forward so the
+  // change is visible even on filesystems with coarse timestamp resolution.
+  fs.writeFileSync(file, JSON.stringify({ models: [{ slug: "new-model" }] }));
+  const future = new Date(Date.now() + 10_000);
+  fs.utimesSync(file, future, future);
+
+  const second = getModelIndex(file);
+  assert.deepEqual(
+    second.models.map((m) => m.slug),
+    ["new-model"],
+    "getModelIndex must pick up the rewritten cache without a restart",
+  );
+});
+
+test("getModelIndex does not pin the fallback when the file is temporarily missing", () => {
+  // A missing file must not be cached, or a transient read failure would freeze
+  // the server on the fallback until restart — the opposite of the goal.
+  const dir = tmp();
+  const file = path.join(dir, "models_cache.json");
+
+  assert.equal(getModelIndex(file).source, "fallback");
+
+  fs.writeFileSync(file, JSON.stringify({ models: [{ slug: "arrived" }] }));
+  assert.deepEqual(getModelIndex(file).models.map((m) => m.slug), ["arrived"]);
 });

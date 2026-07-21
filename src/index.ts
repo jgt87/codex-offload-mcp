@@ -17,15 +17,18 @@ import {
   type JobMeta,
 } from "./jobs.js";
 import { diffSinceBaseline, parseReport } from "./handoff.js";
-import { findModel, knownEfforts, listedModels, readModelIndex } from "./models.js";
+import { findModel, getModelIndex, knownEfforts, listedModels, readModelIndex } from "./models.js";
 import { route } from "./route.js";
 import { offloadGuidance, readOffloadLevel } from "./offload.js";
 
 const SANDBOX = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 
-// Read once at startup from Codex's own model index, so models and reasoning
-// levels released after this server was written are picked up without a code
-// change. Restart the server to re-read. Falls back safely when unreadable.
+// Startup snapshot of Codex's own model index, used to build the static schema
+// strings below (the effort enum, the model menus in tool descriptions) — those
+// are fixed for the life of an MCP session and cannot change after registration.
+// Routing and validation instead call getModelIndex() at launch time, which
+// re-reads when Codex rewrites the cache, so a long-running server never routes
+// to a model the lineup has since dropped. Falls back safely when unreadable.
 const MODEL_INDEX = readModelIndex();
 
 // Operator bias on the whether-to-offload judgment, read once at startup like
@@ -182,11 +185,12 @@ server.registerTool(
     documentation,
   }) => {
     try {
-      const chosen = route(MODEL_INDEX, { prompt, model, reasoningEffort, autoRoute });
+      const index = getModelIndex();
+      const chosen = route(index, { prompt, model, reasoningEffort, autoRoute });
 
       // Reject an effort this model cannot take before spawning. Codex forwards
       // the value unchecked, so otherwise it fails a turn minutes in.
-      const info = chosen.model ? findModel(MODEL_INDEX, chosen.model) : undefined;
+      const info = chosen.model ? findModel(index, chosen.model) : undefined;
       if (chosen.reasoningEffort && info && info.efforts.length > 0) {
         const ok = info.efforts.map((e) => e.effort);
         if (!ok.includes(chosen.reasoningEffort)) {
@@ -294,9 +298,10 @@ server.registerTool(
   },
   async ({ plan, cwd, model, sandbox, addDirs, structured, reasoningEffort, autoRoute, documentation }) => {
     try {
-      const chosen = route(MODEL_INDEX, { prompt: plan, model, reasoningEffort, autoRoute });
+      const index = getModelIndex();
+      const chosen = route(index, { prompt: plan, model, reasoningEffort, autoRoute });
 
-      const info = chosen.model ? findModel(MODEL_INDEX, chosen.model) : undefined;
+      const info = chosen.model ? findModel(index, chosen.model) : undefined;
       if (chosen.reasoningEffort && info && info.efforts.length > 0) {
         const ok = info.efforts.map((e) => e.effort);
         if (!ok.includes(chosen.reasoningEffort)) {
@@ -492,13 +497,16 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const listed = listedModels(MODEL_INDEX);
+    // Fresh read, so this reflects the current cache even mid-session — it is
+    // the tool a caller reaches for precisely when a job failed on a model that
+    // is no longer available, and it must not itself report the stale lineup.
+    const index = getModelIndex();
+    const listed = listedModels(index);
     return text({
-      source: MODEL_INDEX.source,
-      fetchedAt: MODEL_INDEX.fetchedAt,
-      clientVersion: MODEL_INDEX.clientVersion,
-      ...(MODEL_INDEX.note ? { note: MODEL_INDEX.note } : {}),
-      // Read at startup; restart the server to pick up a newer index.
+      source: index.source,
+      fetchedAt: index.fetchedAt,
+      clientVersion: index.clientVersion,
+      ...(index.note ? { note: index.note } : {}),
       models: listed.map((m) => ({
         slug: m.slug,
         description: m.description,

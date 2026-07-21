@@ -151,7 +151,8 @@ MCP connection for changes to take effect — a running server keeps the old `di
 - `src/handoff.ts` — the report schema Codex must fill in, the git-based change verification, and
   the standing instructions appended per job (documentation, plan-execution framing)
 - `src/codexBin.ts` — locates the real Codex executable
-- `src/models.ts` — tolerant reader for Codex's `models_cache.json`; the discovered facts
+- `src/models.ts` — tolerant reader for Codex's `models_cache.json`; the discovered facts.
+  `getModelIndex()` re-reads on the file's mtime change, so routing tracks Codex rotating its lineup
 - `src/route.ts` — the tier heuristic and tier→model/effort mapping; the invented part
 - `src/offload.ts` — the `CODEX_MCP_OFFLOAD_LEVEL` operator lever; env var → bias clause on the
   `codex_start` description
@@ -166,6 +167,17 @@ text written to `prompt.txt`, never to `meta.prompt`, so status output keeps sho
 actual prompt. `launch()` takes the composed text as a separate argument for exactly that reason.
 
 ## Architecture notes
+
+**The model index is read at launch time, not frozen at startup.** `getModelIndex()` re-reads
+`models_cache.json` whenever its mtime changes, and the launch handlers route over that rather than
+the startup `MODEL_INDEX`. This is not a micro-optimisation to undo: Codex rewrites the cache during
+normal use, and a server that read the lineup once would keep routing to a model Codex has since
+dropped — the job then fails *after* it spawns with "model not available", which is exactly the
+minutes-later failure the pre-spawn effort check exists to avoid. `MODEL_INDEX` survives only for the
+static schema strings (the effort enum, the model menus in tool descriptions), which are fixed for an
+MCP session and genuinely cannot change after registration; everything that picks a model for a real
+job goes through `getModelIndex()`. A missing file is deliberately not cached, so a transient read
+failure cannot pin the fallback until restart.
 
 **Jobs are detached and disk-backed.** State lives in `~/.codex-mcp/jobs/<jobId>/`
 (`meta.json`, `events.jsonl`, `stderr.log`, `last-message.txt`, `prompt.txt`), not in memory,

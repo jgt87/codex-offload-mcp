@@ -350,10 +350,14 @@ index currently offers, not a fixed list:
 ```
 
 **The model lineup is discovered, not hardcoded.** Models and their accepted effort levels are read
-at startup from Codex's own index (`~/.codex/models_cache.json`), so a model released after this
-server was written is picked up on restart. Tiers map onto that lineup by matching the vendor's own
-descriptions, which means a renamed model still routes sensibly. `codex_models` shows what was
-found, including whether the index was actually readable.
+from Codex's own index (`~/.codex/models_cache.json`), so a model released after this server was
+written is picked up automatically. Routing re-reads the index whenever Codex rewrites it (the file's
+mtime changes), so a long-running server keeps up with Codex rotating or dropping models instead of
+routing to one that no longer exists and failing the job after it spawns. Tiers map onto that lineup
+by matching the vendor's own descriptions, which means a renamed model still routes sensibly.
+`codex_models` reports the current lineup, including whether the index was actually readable. (The
+model names shown inside the tool *descriptions* are still the startup snapshot — schema text is
+fixed for an MCP session — so a restart refreshes those, but routing itself does not need one.)
 
 This matters more than it sounds. The first version of this feature hardcoded the effort list, and
 it was wrong within the hour — it invented `none` and `minimal`, which no model advertises, and

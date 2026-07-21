@@ -123,6 +123,37 @@ export function readModelIndex(file = cachePath()): ModelIndex {
   };
 }
 
+let cached: { index: ModelIndex; mtimeMs: number; file: string } | undefined;
+
+/**
+ * `readModelIndex` re-reading only when the cache file's mtime changes.
+ *
+ * The index is consulted on the hot path of every job launch, and Codex rewrites
+ * `models_cache.json` during normal use — rotating its lineup, dropping models.
+ * A server that read the index once at startup keeps routing to whatever was
+ * current then, so once Codex drops a model the server still picks it and the
+ * job fails *after* it spawns, with "model not available", minutes of nothing.
+ * Refreshing on mtime change closes that gap without a restart, and costs only a
+ * `stat` on the calls where nothing changed.
+ */
+export function getModelIndex(file = cachePath()): ModelIndex {
+  let mtimeMs: number | undefined;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    mtimeMs = undefined; // missing file: fall through, readModelIndex returns the fallback
+  }
+  if (cached && cached.file === file && mtimeMs !== undefined && cached.mtimeMs === mtimeMs) {
+    return cached.index;
+  }
+  const index = readModelIndex(file);
+  // Only remember a real mtime. If the file is missing we re-read next call
+  // rather than pinning the fallback until restart — the opposite of the bug
+  // this function exists to fix.
+  if (mtimeMs !== undefined) cached = { index, mtimeMs, file };
+  return index;
+}
+
 /** Models Codex would itself offer, best-first by its own priority ordering. */
 export function listedModels(index: ModelIndex): ModelInfo[] {
   return index.models
