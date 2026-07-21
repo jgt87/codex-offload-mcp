@@ -111,11 +111,38 @@ export const DOCUMENTATION_INSTRUCTION = [
   "  padding the docs.",
 ].join("\n");
 
+/**
+ * Prepended when a job is executing a plan another model already authored. The
+ * design thinking is done and lives in the plan; the failure mode to guard
+ * against is the executor quietly substituting its own approach. So the framing
+ * asks for faithful execution and, crucially, for a *stop-and-report* on any
+ * step it cannot carry out — the planner can then revise and resume rather than
+ * discover a silent redesign after the fact. This is the executor half of the
+ * plan→execute pair; the planning half is done in-process by the caller.
+ */
+export const PLAN_EXECUTION_INSTRUCTION = [
+  "You are executing a plan authored by another model (the planner), which has already done the",
+  "design thinking. Carry it out faithfully — do not redesign it.",
+  "",
+  "- Follow the steps in order and implement exactly what each one specifies.",
+  "- Small, obvious fill-ins the plan left implicit (an import it omitted, an exact type) are fine.",
+  "  Substituting a different algorithm, structure, or interface is not.",
+  "- If a step is wrong, impossible, or unsafe, STOP at that step and record it in `blockers`",
+  "  rather than improvising a different design. The planner can revise the plan and resume.",
+  "- In `summary`, call out every step you completed, any you could not, and anywhere you had to",
+  "  deviate and why.",
+  "",
+  "The plan follows.",
+  "---",
+].join("\n");
+
 export interface ComposeOptions {
   /** Read-only jobs cannot write anything, so the instruction is pointless there. */
   sandbox: string;
   /** Explicit opt-out. Undefined means "decide from the sandbox". */
   documentation?: boolean;
+  /** Prepend the plan-execution framing — the prompt is a plan to be carried out, not a fresh task. */
+  planExecution?: boolean;
 }
 
 /** True when a job is both allowed and asked to document itself. */
@@ -127,7 +154,12 @@ export function shouldDocument(opts: ComposeOptions): boolean {
 
 /** The text actually handed to Codex, which is not always the caller's prompt. */
 export function composePrompt(prompt: string, opts: ComposeOptions): string {
-  return shouldDocument(opts) ? `${prompt}\n\n${DOCUMENTATION_INSTRUCTION}\n` : prompt;
+  // Framing goes before the plan; the documentation requirement goes after the
+  // work, as it does for an ordinary job. Order matters: the executor should
+  // read "here is a plan to carry out" before the plan itself.
+  let text = opts.planExecution ? `${PLAN_EXECUTION_INSTRUCTION}\n${prompt}` : prompt;
+  if (shouldDocument(opts)) text = `${text}\n\n${DOCUMENTATION_INSTRUCTION}\n`;
+  return text;
 }
 
 export interface GitBaseline {

@@ -19,6 +19,16 @@ steering that choice is the `codex_start` description in `src/index.ts`, which t
 reads at call time and judges against. Everything below is that judgment written down, not behaviour
 the code enforces.
 
+**The one operator lever on that judgment is `CODEX_MCP_OFFLOAD_LEVEL`** (`src/offload.ts`),
+set in the MCP server's env. Because the whether-decision lives only in the description prose, the
+knob works by appending a bias clause to that description — `aggressive` lowers the bar (offload
+more, to conserve the driving model's usage), `conservative` raises it, `balanced` (default) adds
+nothing. It steers the reading model; it enforces nothing, which is why it is a clause of prose and
+not a branch in `route.ts`. Read once at startup like the model index, so restart to change it, and
+surfaced in `codex_models`' `offloadBias` field so the active setting is visible. The hard
+exclusions (needs conversation context, exploratory, trivial triage) still bind at every level — a
+bias toward offloading must never override them.
+
 **Model and effort *are* chosen here**, in `src/route.ts`, and that is the one exception to the
 above. Keep the distinction sharp when editing: routing decides *how* a job runs, never *whether* it
 runs. The facts it routes over — which models exist, which efforts each accepts — are read from
@@ -84,6 +94,33 @@ a later reader tell a still-valid rule from a stale one.
   is cheap to detect — the condition that makes a small local model safe to lean on. Codex is the
   wrong tier for these: it returns a job id, not an answer, and bills a subscription to do it.
 
+## Collaboration modes
+
+The pair supports a handful of named ways to divide work between the driving model and Codex. Only
+one needs machinery of its own; the rest are patterns over the existing tools, given a slash command
+each so a human can start them from anywhere. The commands live canonically in `.claude/commands/`
+(active in this repo, version-controlled) and are copied to `~/.claude/commands/` so they work in
+every repo — the repo copy is the source of truth, so re-copy after editing one.
+
+- **plan→execute** (`/plan-execute`, tool `codex_execute_plan`). The driving model does the design
+  thinking in-conversation and hands Codex a finished, self-contained plan to carry out. This is the
+  one mode with real machinery: `codex_execute_plan` prepends `PLAN_EXECUTION_INSTRUCTION`
+  (`handoff.ts`) so Codex is told to follow the plan faithfully and *stop-and-report* on any step it
+  cannot do, rather than silently substituting its own design — the failure mode the framing exists
+  to catch. Because the reasoning is already extracted into the plan, execution usually wants a lower
+  effort than the whole task would; routing still reads the plan text, and effort stays overridable.
+  It threads through the same `composePrompt` seam as the documentation instruction (framing before
+  the plan, doc note after), so `meta.prompt` still shows the caller's plan, not the machinery.
+- **execute→review** (`/codex-review`). Codex does the work; the driving model reviews the git diff
+  via `codex_result` and corrects in-thread with `codex_reply`. This is the verification loop given a
+  front door — no new code.
+- **split & parallelize** (`/codex-split`). Decompose into independent chunks (never two jobs writing
+  the same file) and dispatch several `codex_start` calls at once. This is what non-blocking delegation
+  is *for*; the command just names it.
+- **draft→refine** (`/codex-draft`). Codex produces a fast bulk draft cheaply; the driving model
+  refines it in-process where conversation context and taste are needed. Usage arbitrage on the
+  output tokens, with the judgement kept on the driving side.
+
 ## Commands
 
 ```sh
@@ -111,10 +148,15 @@ MCP connection for changes to take effect — a running server keeps the old `di
 
 - `src/index.ts` — MCP server, tool definitions and their descriptions
 - `src/jobs.ts` — job lifecycle: spawn, state reconciliation, event parsing, cancel, prune
-- `src/handoff.ts` — the report schema Codex must fill in, and git-based change verification
+- `src/handoff.ts` — the report schema Codex must fill in, the git-based change verification, and
+  the standing instructions appended per job (documentation, plan-execution framing)
 - `src/codexBin.ts` — locates the real Codex executable
 - `src/models.ts` — tolerant reader for Codex's `models_cache.json`; the discovered facts
 - `src/route.ts` — the tier heuristic and tier→model/effort mapping; the invented part
+- `src/offload.ts` — the `CODEX_MCP_OFFLOAD_LEVEL` operator lever; env var → bias clause on the
+  `codex_start` description
+- `.claude/commands/` — slash commands that start each collaboration mode; copied to
+  `~/.claude/commands/` for use in every repo (see "Collaboration modes")
 
 **Write-capable jobs are asked to document themselves.** `composePrompt` in `handoff.ts` appends a
 standing instruction, and the report carries a required `documentation` field. Two things about it

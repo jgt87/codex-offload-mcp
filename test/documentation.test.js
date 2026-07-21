@@ -5,6 +5,7 @@ import {
   composePrompt,
   shouldDocument,
   DOCUMENTATION_INSTRUCTION,
+  PLAN_EXECUTION_INSTRUCTION,
   HANDOFF_SCHEMA,
 } from "../dist/handoff.js";
 
@@ -48,6 +49,38 @@ test("the instruction steers away from inventing changelog files", () => {
 
 test("the instruction allows skipping when documentation is not warranted", () => {
   assert.match(DOCUMENTATION_INSTRUCTION, /Skip it when it does not apply/);
+});
+
+test("plan execution prepends the faithful-execution framing before the plan", () => {
+  const out = composePrompt("1. Edit foo.ts\n2. Add a test", {
+    sandbox: "workspace-write",
+    planExecution: true,
+  });
+  assert.ok(out.startsWith(PLAN_EXECUTION_INSTRUCTION));
+  assert.ok(out.includes("1. Edit foo.ts"));
+  // The plan comes after the framing, not before it.
+  assert.ok(out.indexOf(PLAN_EXECUTION_INSTRUCTION) < out.indexOf("1. Edit foo.ts"));
+});
+
+test("plan execution and documentation compose: framing first, plan, then doc note", () => {
+  const out = composePrompt("Do the steps", { sandbox: "workspace-write", planExecution: true });
+  const framing = out.indexOf(PLAN_EXECUTION_INSTRUCTION);
+  const plan = out.indexOf("Do the steps");
+  const doc = out.indexOf(DOCUMENTATION_INSTRUCTION);
+  assert.ok(framing < plan && plan < doc, "expected framing < plan < documentation");
+});
+
+test("plan execution framing is absent unless asked for", () => {
+  const out = composePrompt("Do the steps", { sandbox: "workspace-write" });
+  assert.ok(!out.includes(PLAN_EXECUTION_INSTRUCTION));
+});
+
+test("the plan-execution framing insists on stop-and-report over silent redesign", () => {
+  // The whole point of the mode: the executor must not quietly substitute its
+  // own design when a step is wrong — it must surface it so the planner revises.
+  assert.match(PLAN_EXECUTION_INSTRUCTION, /do not redesign/i);
+  assert.match(PLAN_EXECUTION_INSTRUCTION, /STOP at that step/);
+  assert.match(PLAN_EXECUTION_INSTRUCTION, /blockers/);
 });
 
 test("the handoff schema requires an account of documentation", () => {

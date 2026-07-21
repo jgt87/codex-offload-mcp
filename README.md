@@ -30,6 +30,7 @@ against git rather than taken on trust, because handing work between models is p
 | Tool | Returns |
 | --- | --- |
 | `codex_start` | `{ jobId, state, … }` — immediately, job runs in the background |
+| `codex_execute_plan` | `{ jobId, … }` — hand Codex a finished plan to carry out faithfully |
 | `codex_status` | State, elapsed time, commands run, files touched, recent activity |
 | `codex_result` | Structured handoff report + git-verified changes; progress if still running |
 | `codex_reply` | Continues a job's Codex thread with a follow-up; returns a new jobId |
@@ -171,6 +172,41 @@ git wins. For anything that matters, go further than reading the report: run the
 the thing under test to confirm they actually fail. A suite that passes proves less than a suite
 you have watched fail for the right reason.
 
+## Collaboration modes
+
+One-shot offload — hand Codex a task, collect the result — is the base case. On top of it are a few
+named ways to split work between the two models, each with a slash command so you can start one from
+any repo. Install the commands by copying them into your Claude Code commands directory:
+
+```sh
+cp .claude/commands/*.md ~/.claude/commands/
+```
+
+| Command | Pattern | Who does what |
+| --- | --- | --- |
+| `/plan-execute <task>` | plan → execute | Claude designs the change and writes a concrete plan; Codex carries it out faithfully in the background. |
+| `/codex-review <task>` | execute → review | Codex does the work; Claude reviews the git diff and sends corrections with `codex_reply`. |
+| `/codex-split <task>` | split & parallelize | Claude decomposes the task into independent chunks and dispatches several Codex jobs at once, then reassembles. |
+| `/codex-draft <task>` | draft → refine | Codex produces a fast first draft cheaply; Claude refines it in-process where context and taste are needed. |
+
+The split is the same one the whole server is built on: the reasoning, the judgement and the
+conversation context stay with Claude; the expensive output tokens — typing out a plan, a bulk draft,
+a mechanical migration — go to Codex, which bills separately. Three of the four modes need no new
+code; they are patterns over `codex_start`, `codex_result` and `codex_reply`, named and given a front
+door.
+
+**plan→execute is the exception — it has machinery of its own.** It adds a tool,
+`codex_execute_plan`, that takes a finished plan rather than an open task. Codex is told the plan came
+from another model and to follow it faithfully — and, crucially, to **stop and report a blocker**
+instead of quietly substituting its own design when a step is wrong, so you can revise the plan and
+resume with `codex_reply`. Because the design thinking is already done and lives in the plan,
+execution usually needs less reasoning effort than the whole task would; routing still reads the plan
+text and effort stays overridable, so pin a lower `reasoningEffort` when the steps are mechanical.
+
+It fits the same seam as the documentation instruction: the faithful-execution framing is prepended
+to what Codex receives, but `codex_status` and `codex_list` still show the plan you actually handed
+over, not the machinery around it.
+
 ## Orchestration
 
 Two decisions get made per task, and they are handled very differently.
@@ -184,7 +220,30 @@ Whether a task is self-contained, whether there is useful work to do while it ru
 about to change your mind about the approach: none of that is visible from inside an MCP server, so
 the judgment stays with the model that has the context, and this server sticks to running the job
 and checking the result. Editing that description in `src/index.ts` is how you change delegation
-behaviour; there is no config to tune.
+behaviour in general.
+
+**One dial you can turn without touching code: how much to offload.** The whether-decision stays the
+model's, but you can bias it. Set the `CODEX_MCP_OFFLOAD_LEVEL` environment variable on the server to
+`conservative`, `balanced` (the default) or `aggressive`, and it appends a matching instruction to
+the `codex_start` description the model reads — `aggressive` lowers the bar so more work goes to Codex
+(useful when you want to conserve Claude's own usage), `conservative` raises it. It steers judgment
+rather than enforcing a rule: the hard exclusions — needs conversation context, exploratory, trivial
+triage — still hold at every level. It is read once at startup, so restart the server after changing
+it, and `codex_models` reports the active setting so you can confirm it took. In your MCP config it
+goes in the server's `env` block:
+
+```json
+{
+  "servers": {
+    "codex-offload": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["C:/path/to/codex-offload-mcp/dist/index.js"],
+      "env": { "CODEX_MCP_OFFLOAD_LEVEL": "aggressive" }
+    }
+  }
+}
+```
 
 **Which model and how hard it thinks *are* decided here** — see below. That part is a genuine
 heuristic, and the honest framing is that it is the one invented thing in the pipeline: no API

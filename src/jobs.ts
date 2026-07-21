@@ -199,6 +199,8 @@ export interface StartOptions {
   routing?: JobRouting;
   /** Ask the job to document itself. Defaults on, except under read-only. */
   documentation?: boolean;
+  /** Frame the prompt as a plan to execute faithfully, not a fresh task. */
+  planExecution?: boolean;
   /** Require a typed handoff report instead of free prose. Defaults to true. */
   structured?: boolean;
 }
@@ -235,7 +237,11 @@ export function startJob(opts: StartOptions): JobMeta {
   for (const d of opts.addDirs ?? []) args.push("--add-dir", path.resolve(d));
   if (structured) args.push("--output-schema", writeSchema(jobId));
 
-  const docOpts = { sandbox, documentation: opts.documentation };
+  const docOpts = {
+    sandbox,
+    documentation: opts.documentation,
+    planExecution: opts.planExecution,
+  };
 
   return launch(
     jobId,
