@@ -75,6 +75,22 @@ function notFound(jobId: string) {
   };
 }
 
+/**
+ * What to tell the driving model when a job is still running. Each status/result
+ * check is a full model turn, so re-checking in a loop is the actual token burn —
+ * not the payload size. Steer to the pattern CLAUDE.md documents: keep working and
+ * collect later, and only when there is genuinely nothing else to do, block on the
+ * job finishing with Monitor (an until-loop) rather than re-polling. A timed sleep
+ * is a trap: this harness blocks foreground sleep, so the call returns at once and
+ * the announced wait becomes a fiction the model pays for by re-polling anyway.
+ */
+const STILL_RUNNING_STEER =
+  "Still running — no final answer yet. Don't re-check in a loop: each check is a " +
+  "model turn, so keep working on something else and collect when you next need it. " +
+  "If there is genuinely nothing else to do, block on the job finishing with Monitor " +
+  "(an until-loop), never a timed sleep — this harness ignores foreground sleep, so a " +
+  "sleep-then-recheck just burns turns.";
+
 /** The shape shared by status/list, kept small so polling stays cheap. */
 function brief(meta: JobMeta) {
   return {
@@ -158,7 +174,8 @@ server.registerTool(
       "those tokens conserves your own usage — this reason holds even when the task is fast, " +
       "because you and Codex bill separately. Codex edits files on disk directly in `cwd`, so " +
       "treat the working tree as modified once the job finishes. " +
-      "Poll with codex_status and collect the answer with codex_result. " +
+      "Keep working while it runs; check codex_status when you need to and collect the answer " +
+      "with codex_result — don't re-check in a tight loop, since each check is a model turn. " +
       "Still the wrong tool for a quick question you need answered right now, and for trivial " +
       "triage or classification (relevance filtering, labelling, risky-or-not) send those to a " +
       "local model instead — this returns a job id, not an answer, so anything cheaper to resolve " +
@@ -290,8 +307,9 @@ server.registerTool(
       "the planning did, so consider pinning a lower `reasoningEffort` unless individual steps are " +
       "themselves subtle. The plan must be self-contained: Codex cannot see this conversation, so " +
       "state every step, file, and acceptance check in the plan text itself. " +
-      "Poll with codex_status and collect the result with codex_result, which checks what Codex " +
-      "did against git.",
+      "Keep working while it runs; check codex_status when you need to and collect the result with " +
+      "codex_result, which checks what Codex did against git — don't re-check in a tight loop, since " +
+      "each check is a model turn.",
     inputSchema: {
       plan: z
         .string()
@@ -400,6 +418,7 @@ server.registerTool(
     const events = summarizeEvents(jobId, verbose ? 100 : 5);
     return text({
       ...brief(meta),
+      ...(meta.state === "running" ? { note: STILL_RUNNING_STEER } : {}),
       commandsRun: events.commandsRun,
       filesTouched: events.filesTouched,
       recentActivity: events.activity,
@@ -436,7 +455,7 @@ server.registerTool(
     if (meta.state === "running") {
       return text({
         ...brief(meta),
-        note: "Still running — no final answer yet. Retry once codex_status reports 'done'.",
+        note: STILL_RUNNING_STEER,
         commandsRun: events.commandsRun,
         filesTouched: events.filesTouched,
       });
@@ -490,7 +509,8 @@ server.registerTool(
       "Send a follow-up into a finished job's Codex thread — corrections, review comments, 'you " +
       "missed X', 'now do Y as well'. Codex retains everything from the original job, so this is " +
       "far better than starting a fresh job that would begin cold. " +
-      "Returns a new jobId that you poll exactly like codex_start. " +
+      "Returns a new jobId you collect exactly like codex_start — keep working while it runs " +
+      "rather than re-checking in a loop. " +
       "The follow-up reuses the original job's working directory and sandbox.",
     inputSchema: {
       jobId: z.string().describe("The job to continue. May itself be a previous codex_reply job."),

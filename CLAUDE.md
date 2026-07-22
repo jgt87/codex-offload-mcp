@@ -201,8 +201,13 @@ the call returns at once and the model re-polls seconds later, making the announ
 whole point of non-blocking delegation is that there *is* other work to do meanwhile, so the right move
 is almost always to keep working and collect with `codex_result` when ready. When there is genuinely
 nothing else, block on the job actually finishing with `Monitor` (an until-loop), never a timed
-`sleep`. The collaboration-mode commands say this so the pattern is steered where the repo controls it;
-the underlying reach-for-`sleep` habit is global harness behaviour and cannot be fixed from here.
+`sleep`. This steer is placed where the driving model actually reads it at the moment of temptation:
+the still-running responses from `codex_status` and `codex_result` carry `STILL_RUNNING_STEER`
+(`index.ts`), and the tool descriptions say "keep working, don't re-check in a loop" rather than the
+old "poll with codex_status" — because each check is a full model turn, so a tight re-check loop is
+the actual token burn, not the payload size. The collaboration-mode commands repeat it too. The
+underlying reach-for-`sleep` habit is global harness behaviour and cannot be fixed from here, but
+every runtime surface that precedes it now points the other way.
 
 **Jobs are detached and disk-backed.** State lives in `~/.codex-mcp/jobs/<jobId>/`
 (`meta.json`, `events.jsonl`, `stderr.log`, `last-message.txt`, `prompt.txt`), not in memory,
