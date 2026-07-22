@@ -102,7 +102,7 @@ each so a human can start them from anywhere. The commands live canonically in `
 (active in this repo, version-controlled) and are copied to `~/.claude/commands/` so they work in
 every repo — the repo copy is the source of truth, so re-copy after editing one.
 
-- **plan→execute** (`/plan-execute`, tool `codex_execute_plan`). The driving model does the design
+- **plan→execute** (`/codex-plan-execute`, tool `codex_execute_plan`). The driving model does the design
   thinking in-conversation and hands Codex a finished, self-contained plan to carry out. This is the
   one mode with real machinery: `codex_execute_plan` prepends `PLAN_EXECUTION_INSTRUCTION`
   (`handoff.ts`) so Codex is told to follow the plan faithfully and *stop-and-report* on any step it

@@ -184,7 +184,7 @@ cp .claude/commands/*.md ~/.claude/commands/
 
 | Command | Pattern | Who does what |
 | --- | --- | --- |
-| `/plan-execute <task>` | plan → execute | Claude designs the change and writes a concrete plan; Codex carries it out faithfully in the background. |
+| `/codex-plan-execute <task>` | plan → execute | Claude designs the change and writes a concrete plan; Codex carries it out faithfully in the background. |
 | `/codex-review <task>` | execute → review | Codex does the work; Claude reviews the git diff and sends corrections with `codex_reply`. |
 | `/codex-split <task>` | split & parallelize | Claude decomposes the task into independent chunks and dispatches several Codex jobs at once, then reassembles. |
 | `/codex-draft <task>` | draft → refine | Codex produces a fast first draft cheaply; Claude refines it in-process where context and taste are needed. |
