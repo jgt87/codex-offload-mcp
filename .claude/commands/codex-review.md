@@ -8,7 +8,9 @@ The user wants the execute→review loop: Codex does the work, you check it.
 Task: $ARGUMENTS
 
 1. **Dispatch** with `codex_start(prompt, cwd)` — a self-contained prompt, since Codex cannot see
-   this conversation. You get a jobId back immediately; keep working meanwhile.
+   this conversation. You get a jobId back immediately; keep working meanwhile. Don't sleep-poll —
+   foreground `sleep` is blocked by the harness, so a narrated wait collapses into an instant re-poll;
+   do real work and collect with `codex_result` when ready, or block on completion with `Monitor`.
 2. **Collect and review** with `codex_result`. Trust `actualChanges` (git's account) over Codex's
    own report, and re-read each changed file before judging it. Check correctness, not just that it
    ran.

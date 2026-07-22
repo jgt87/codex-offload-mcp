@@ -195,6 +195,15 @@ MCP session and genuinely cannot change after registration; everything that pick
 job goes through `getModelIndex()`. A missing file is deliberately not cached, so a transient read
 failure cannot pin the fallback until restart.
 
+**Waiting on a job is not sleep-polling.** A driving model with nothing else to do tends to narrate
+"I'll wait N seconds" and issue a foreground `sleep` — but this harness blocks foreground `sleep`, so
+the call returns at once and the model re-polls seconds later, making the announced wait a fiction. The
+whole point of non-blocking delegation is that there *is* other work to do meanwhile, so the right move
+is almost always to keep working and collect with `codex_result` when ready. When there is genuinely
+nothing else, block on the job actually finishing with `Monitor` (an until-loop), never a timed
+`sleep`. The collaboration-mode commands say this so the pattern is steered where the repo controls it;
+the underlying reach-for-`sleep` habit is global harness behaviour and cannot be fixed from here.
+
 **Jobs are detached and disk-backed.** State lives in `~/.codex-mcp/jobs/<jobId>/`
 (`meta.json`, `events.jsonl`, `stderr.log`, `last-message.txt`, `prompt.txt`), not in memory,
 because a job outlives the server process that started it. Never move job state into a module-level

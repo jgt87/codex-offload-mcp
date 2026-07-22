@@ -15,8 +15,12 @@ Task: $ARGUMENTS
 3. **Hand it off** with `codex_execute_plan(plan, cwd=<repo root>)`. Since the design is done,
    consider a lower `reasoningEffort` unless individual steps are themselves subtle. You get a jobId
    back immediately.
-4. **Keep working or verify.** Poll `codex_status`; collect with `codex_result`, which checks Codex's
-   report against git. If Codex reports a blocker, revise the plan and resume with `codex_reply`.
+4. **Keep working or verify — don't sleep-poll.** The job runs detached; do real work meanwhile and
+   collect with `codex_result` when you're ready, which checks Codex's report against git. Don't
+   narrate a wait and fire `sleep` — foreground `sleep` is blocked by the harness, so the wait never
+   happens and you just re-poll seconds later. If you genuinely have nothing else to do, block on
+   completion with `Monitor` (an until-loop on the job finishing) instead of a timed poll. If Codex
+   reports a blocker, revise the plan and resume with `codex_reply`.
 
 If the task is exploratory (each step changes what you'd do next) or needs this conversation's
 context to execute, say so and do it in-process instead — plan→execute only fits work whose shape is
