@@ -136,6 +136,54 @@ export const PLAN_EXECUTION_INSTRUCTION = [
   "---",
 ].join("\n");
 
+/**
+ * Appended to every job, regardless of sandbox. Codex runs as a background job
+ * for a driving model that is still active and can do things Codex cannot —
+ * reach the conversation, obtain approvals, run outside the sandbox. So when
+ * Codex hits a wall it genuinely cannot cross, the useful move is to stop and
+ * hand that piece back cleanly, not to fake a result, quietly substitute a
+ * weaker approach, disable a safety restriction, or grind until it times out.
+ *
+ * Two things about the wording are deliberate. It is unconditional (unlike the
+ * documentation note) because privilege and tool walls happen under read-only
+ * too. And it draws a hard line between *cannot* (a boundary — hand back) and
+ * *hard* (a failing test, a stubborn bug — work to finish), because an
+ * unqualified "stop when blocked" turns every difficulty into a premature
+ * hand-back, which is worse than useless: it parks two models on work one could
+ * have finished.
+ */
+export const HANDBACK_INSTRUCTION = [
+  "---",
+  "Handing work back (added by the caller, applies to all work above):",
+  "",
+  "You are running as a background job for another model that is still active and can do things you",
+  "cannot. If you hit a boundary you genuinely cannot cross, stop and hand that piece back rather",
+  "than forcing it. Boundaries that warrant a hand-back:",
+  "",
+  "- A command, file, or network access the sandbox denies, or an action needing an approval or",
+  "  privilege escalation you cannot obtain here.",
+  "- Missing credentials, tokens, or authentication you were not given and cannot safely acquire.",
+  "- A tool or capability this environment does not give you.",
+  "- Something that turns on a decision or context living in the caller's conversation, which you",
+  "  cannot see.",
+  "",
+  "When that happens:",
+  "",
+  "- Do not fabricate a result, silently substitute a weaker approach, or claim a success you did",
+  "  not achieve.",
+  "- Do not disable, bypass, or widen a safety or sandbox restriction to force it through.",
+  "- Do not retry the same blocked action in a loop or grind until you time out.",
+  "- Do as much of the surrounding work as you legitimately can. Then set `status` to `blocked`, or",
+  "  `partial` if other parts succeeded, and record each wall in `blockers` as a concrete request:",
+  "  what you were doing, what stopped you, and the exact thing the caller must do to unblock it —",
+  "  run the command themselves, grant network, supply credential X, widen the sandbox to",
+  "  workspace-write, decide Y. If you are not returning a structured report, say the same plainly",
+  "  at the start of your summary.",
+  "",
+  "This is only for things you truly cannot do, not for ordinary difficulty. A failing test, a",
+  "compile error, or a hard bug is work to finish — not a wall to hand back.",
+].join("\n");
+
 export interface ComposeOptions {
   /** Read-only jobs cannot write anything, so the instruction is pointless there. */
   sandbox: string;
@@ -154,12 +202,55 @@ export function shouldDocument(opts: ComposeOptions): boolean {
 
 /** The text actually handed to Codex, which is not always the caller's prompt. */
 export function composePrompt(prompt: string, opts: ComposeOptions): string {
-  // Framing goes before the plan; the documentation requirement goes after the
-  // work, as it does for an ordinary job. Order matters: the executor should
-  // read "here is a plan to carry out" before the plan itself.
+  // Framing goes before the plan; the standing instructions go after the work,
+  // as they do for an ordinary job. Order matters: the executor should read
+  // "here is a plan to carry out" before the plan itself.
   let text = opts.planExecution ? `${PLAN_EXECUTION_INSTRUCTION}\n${prompt}` : prompt;
-  if (shouldDocument(opts)) text = `${text}\n\n${DOCUMENTATION_INSTRUCTION}\n`;
+  // Hand-back is unconditional — a privilege or tool wall can stop a read-only
+  // job as easily as a writing one — while documentation stays write-gated.
+  text = `${text}\n\n${HANDBACK_INSTRUCTION}\n`;
+  if (shouldDocument(opts)) text = `${text}\n${DOCUMENTATION_INSTRUCTION}\n`;
   return text;
+}
+
+export interface Handback {
+  /** The report status that triggered the hand-back: "blocked" or "partial". */
+  status: string;
+  /** Each wall Codex could not cross, as it recorded them. */
+  blockers: string[];
+  /** What the caller should do about it, in prose. */
+  note: string;
+}
+
+/**
+ * Lift a blocked (or partial-with-blockers) report into a top-level hand-back
+ * signal, so a job that stopped at a wall it could not cross is impossible to
+ * miss under the nested report — the whole point of the hand-back is that the
+ * driving model *acts* on it. Returns undefined when nothing was handed back:
+ * a plain `complete`, or a `partial` that is ordinary leftover work rather than
+ * a wall (no blockers), reads normally through the report.
+ */
+export function deriveHandback(report: unknown): Handback | undefined {
+  if (!report || typeof report !== "object") return undefined;
+  const r = report as Record<string, unknown>;
+  const status = typeof r.status === "string" ? r.status : undefined;
+  if (status !== "blocked" && status !== "partial") return undefined;
+
+  const blockers = Array.isArray(r.blockers)
+    ? r.blockers.filter((b): b is string => typeof b === "string")
+    : [];
+  // A partial with no blocker named is just leftover work, not a hand-back.
+  if (status === "partial" && blockers.length === 0) return undefined;
+
+  const note =
+    status === "blocked"
+      ? "Codex stopped at a boundary it could not cross and handed this back. Take it over: act on " +
+        "the blockers (run the command yourself, widen the sandbox, supply the missing access or " +
+        "decision), then finish the work in-thread or send it back with codex_reply."
+      : "Codex completed part of the work and handed the rest back. Act on the blockers, then either " +
+        "finish those pieces yourself or unblock Codex and continue with codex_reply.";
+
+  return { status, blockers, note };
 }
 
 export interface GitBaseline {

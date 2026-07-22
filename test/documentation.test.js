@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import {
   composePrompt,
   shouldDocument,
+  deriveHandback,
   DOCUMENTATION_INSTRUCTION,
   PLAN_EXECUTION_INSTRUCTION,
+  HANDBACK_INSTRUCTION,
   HANDOFF_SCHEMA,
 } from "../dist/handoff.js";
 
@@ -30,13 +32,72 @@ test("composePrompt appends the instruction, leaving the task first", () => {
   assert.ok(out.includes(DOCUMENTATION_INSTRUCTION));
 });
 
-test("composePrompt returns the prompt untouched when not documenting", () => {
+test("composePrompt leads with the task and omits the doc note when not documenting", () => {
   const prompt = "Analyse the retry logic.";
-  assert.equal(composePrompt(prompt, { sandbox: "read-only" }), prompt);
-  assert.equal(
-    composePrompt(prompt, { sandbox: "workspace-write", documentation: false }),
-    prompt,
-  );
+  // The hand-back instruction is unconditional, so the prompt is never returned
+  // wholesale — but the task still leads and the documentation note stays out.
+  for (const opts of [
+    { sandbox: "read-only" },
+    { sandbox: "workspace-write", documentation: false },
+  ]) {
+    const out = composePrompt(prompt, opts);
+    assert.ok(out.startsWith(prompt));
+    assert.ok(!out.includes(DOCUMENTATION_INSTRUCTION));
+  }
+});
+
+test("the hand-back instruction is appended to every job, read-only included", () => {
+  // Privilege and tool walls stop a read-only job as easily as a writing one,
+  // so the hand-back note is not gated on the sandbox.
+  for (const opts of [
+    { sandbox: "read-only" },
+    { sandbox: "workspace-write" },
+    { sandbox: "workspace-write", documentation: false },
+    { sandbox: "danger-full-access", planExecution: true },
+  ]) {
+    assert.ok(composePrompt("Do the thing", opts).includes(HANDBACK_INSTRUCTION));
+  }
+});
+
+test("the hand-back instruction separates a wall from ordinary difficulty", () => {
+  // The guardrail that keeps it from firing on every hard task: cannot vs hard.
+  assert.match(HANDBACK_INSTRUCTION, /genuinely cannot cross/i);
+  assert.match(HANDBACK_INSTRUCTION, /not for ordinary difficulty/i);
+  assert.match(HANDBACK_INSTRUCTION, /work to finish/i);
+  // And it forbids the failure modes: faking, bypassing safety, grinding.
+  assert.match(HANDBACK_INSTRUCTION, /Do not fabricate/i);
+  assert.match(HANDBACK_INSTRUCTION, /Do not disable, bypass, or widen/i);
+  assert.match(HANDBACK_INSTRUCTION, /Do not retry the same blocked action in a loop/i);
+});
+
+test("deriveHandback surfaces a blocked report and stays quiet on a clean one", () => {
+  const blocked = deriveHandback({ status: "blocked", blockers: ["needs network to fetch deps"] });
+  assert.equal(blocked?.status, "blocked");
+  assert.deepEqual(blocked?.blockers, ["needs network to fetch deps"]);
+  assert.match(blocked?.note ?? "", /handed this back/i);
+
+  // A blocked status with no blocker listed is still a hand-back — the summary
+  // carries the detail — so it must surface.
+  assert.ok(deriveHandback({ status: "blocked", blockers: [] }));
+
+  // Complete work is not a hand-back.
+  assert.equal(deriveHandback({ status: "complete", blockers: [] }), undefined);
+});
+
+test("deriveHandback treats a partial only as a hand-back when it names a wall", () => {
+  // Partial with blockers = stopped at a wall partway; surface it.
+  assert.ok(deriveHandback({ status: "partial", blockers: ["missing API token"] }));
+  // Partial with none = ordinary leftover work, not a hand-back.
+  assert.equal(deriveHandback({ status: "partial", blockers: [] }), undefined);
+});
+
+test("deriveHandback tolerates a missing or malformed report", () => {
+  assert.equal(deriveHandback(undefined), undefined);
+  assert.equal(deriveHandback("not an object"), undefined);
+  assert.equal(deriveHandback({}), undefined);
+  // Non-string blocker entries are dropped rather than thrown on.
+  const h = deriveHandback({ status: "blocked", blockers: ["real", 42, null] });
+  assert.deepEqual(h?.blockers, ["real"]);
 });
 
 test("the instruction steers away from inventing changelog files", () => {

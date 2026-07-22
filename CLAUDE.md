@@ -148,8 +148,9 @@ MCP connection for changes to take effect — a running server keeps the old `di
 
 - `src/index.ts` — MCP server, tool definitions and their descriptions
 - `src/jobs.ts` — job lifecycle: spawn, state reconciliation, event parsing, cancel, prune
-- `src/handoff.ts` — the report schema Codex must fill in, the git-based change verification, and
-  the standing instructions appended per job (documentation, plan-execution framing)
+- `src/handoff.ts` — the report schema Codex must fill in, the git-based change verification, the
+  standing instructions appended per job (hand-back, documentation, plan-execution framing), and
+  `deriveHandback`, which lifts a blocked report into a top-level signal for the caller
 - `src/codexBin.ts` — locates the real Codex executable
 - `src/models.ts` — tolerant reader for Codex's `models_cache.json`; the discovered facts.
   `getModelIndex()` re-reads on the file's mtime change, so routing tracks Codex rotating its lineup
@@ -165,6 +166,21 @@ are deliberate and easy to break. It biases hard toward editing existing files, 
 unqualified version produces a `NOTES.md` in every repo it touches; and it is appended only to the
 text written to `prompt.txt`, never to `meta.prompt`, so status output keeps showing the caller's
 actual prompt. `launch()` takes the composed text as a separate argument for exactly that reason.
+
+**Every job is told to hand work back rather than force it.** Codex runs one-shot in a sandbox for a
+driving model that is still active and can do things Codex cannot — reach the conversation, obtain
+approvals, run outside the sandbox. So `composePrompt` also appends `HANDBACK_INSTRUCTION`: on a wall
+it genuinely cannot cross (a sandbox-denied command, missing credentials, a tool it lacks, a decision
+that lives in the caller's conversation) Codex should stop, set `status` to `blocked`/`partial`, and
+record each wall in `blockers` as a concrete request — *not* fake a result, substitute a weaker
+approach, disable a safety restriction, or grind to a timeout. Two things are deliberate. Unlike the
+documentation note it is **unconditional**, because a privilege or tool wall stops a read-only job as
+easily as a writing one. And it draws a hard line between *cannot* (a boundary → hand back) and
+*hard* (a failing test, a stubborn bug → work to finish); without that line an unqualified "stop when
+blocked" turns every difficulty into a premature hand-back, parking two models on work one could have
+finished. `codex_result` runs the returned report through `deriveHandback` and surfaces any hand-back
+as a top-level `handback` field above the nested report, so the driving model cannot miss that the
+work is now its to pick up — the mechanism is pointless if the caller reads past it.
 
 ## Architecture notes
 

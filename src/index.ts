@@ -16,7 +16,7 @@ import {
   summarizeEvents,
   type JobMeta,
 } from "./jobs.js";
-import { diffSinceBaseline, parseReport } from "./handoff.js";
+import { deriveHandback, diffSinceBaseline, parseReport } from "./handoff.js";
 import {
   findModel,
   getModelIndex,
@@ -445,9 +445,16 @@ server.registerTool(
     const { report, raw } = parseReport(readResult(jobId));
     const changes = meta.git ? diffSinceBaseline(meta.cwd, meta.git) : undefined;
 
+    // A blocked report is a hand-back: Codex hit a wall it could not cross and
+    // is returning that piece for the caller to act on. Surface it above the
+    // nested report so it cannot be missed — the whole mechanism is pointless
+    // if the driving model does not pick the work up.
+    const handback = report ? deriveHandback(report) : undefined;
+
     return text({
       ...brief(meta),
       threadId: meta.threadId,
+      ...(handback ? { handback } : {}),
       ...(report ? { report } : { output: raw || "(no final message was produced)" }),
       actualChanges: changes
         ? {
