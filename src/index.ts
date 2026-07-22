@@ -17,7 +17,14 @@ import {
   type JobMeta,
 } from "./jobs.js";
 import { diffSinceBaseline, parseReport } from "./handoff.js";
-import { findModel, getModelIndex, knownEfforts, listedModels, readModelIndex } from "./models.js";
+import {
+  findModel,
+  getModelIndex,
+  knownEfforts,
+  listedModels,
+  type ModelIndex,
+  readModelIndex,
+} from "./models.js";
 import { route } from "./route.js";
 import { offloadGuidance, readOffloadLevel } from "./offload.js";
 
@@ -82,6 +89,58 @@ function brief(meta: JobMeta) {
     ...(meta.routing ? { routing: meta.routing } : {}),
     ...(meta.parentJobId ? { parentJobId: meta.parentJobId } : {}),
   };
+}
+
+/**
+ * Reason a model/effort pair cannot run, checked against the index *before*
+ * spawning. Codex forwards both values unchecked, so an unusable one otherwise
+ * fails a turn minutes in with a 400 rather than at the call — the same
+ * minutes-later failure the effort check has always guarded against, now
+ * extended to the model itself. Returns undefined when the pair is fine.
+ *
+ * The model half matters because an explicit-but-unknown slug (a stale example
+ * a caller copied, like `gpt-5-codex`, or a model Codex has dropped) previously
+ * slipped straight through: findModel returned undefined, so the effort check
+ * was skipped and nothing else looked at the model. Auto-routed choices are
+ * always drawn from listedModels and so are always known; this only bites an
+ * explicit override.
+ *
+ * Enforced only against a real cache index. Under the empty fallback the lineup
+ * is unknown, so we defer the choice to Codex config rather than reject a model
+ * that may well be valid.
+ */
+function preflight(
+  index: ModelIndex,
+  model: string | undefined,
+  effort: string | undefined,
+): string | undefined {
+  if (!model) return undefined;
+
+  const info = findModel(index, model);
+  if (!info) {
+    if (index.source === "cache" && index.models.length > 0) {
+      const available = listedModels(index)
+        .map((m) => m.slug)
+        .join(", ");
+      return (
+        `Model '${model}' is not in Codex's model index. ` +
+        `Available: ${available}. Omit 'model' to let routing pick one.`
+      );
+    }
+    return undefined;
+  }
+
+  if (effort && info.efforts.length > 0) {
+    const ok = info.efforts.map((e) => e.effort);
+    if (!ok.includes(effort)) {
+      return (
+        `Model ${model} does not accept reasoningEffort '${effort}'. ` +
+        `It supports: ${ok.join(", ")}.`
+      );
+    }
+  }
+
+  return undefined;
 }
 
 const server = new McpServer({ name: "codex-offload", version: "0.1.0" });
@@ -188,21 +247,10 @@ server.registerTool(
       const index = getModelIndex();
       const chosen = route(index, { prompt, model, reasoningEffort, autoRoute });
 
-      // Reject an effort this model cannot take before spawning. Codex forwards
-      // the value unchecked, so otherwise it fails a turn minutes in.
-      const info = chosen.model ? findModel(index, chosen.model) : undefined;
-      if (chosen.reasoningEffort && info && info.efforts.length > 0) {
-        const ok = info.efforts.map((e) => e.effort);
-        if (!ok.includes(chosen.reasoningEffort)) {
-          return {
-            ...text(
-              `Model ${chosen.model} does not accept reasoningEffort '${chosen.reasoningEffort}'. ` +
-                `It supports: ${ok.join(", ")}.`,
-            ),
-            isError: true,
-          };
-        }
-      }
+      // Reject a model or effort this job cannot run, before spawning — Codex
+      // forwards both unchecked, so otherwise the turn fails minutes in.
+      const problem = preflight(index, chosen.model, chosen.reasoningEffort);
+      if (problem) return { ...text(problem), isError: true };
 
       const meta = startJob({
         prompt,
@@ -301,19 +349,10 @@ server.registerTool(
       const index = getModelIndex();
       const chosen = route(index, { prompt: plan, model, reasoningEffort, autoRoute });
 
-      const info = chosen.model ? findModel(index, chosen.model) : undefined;
-      if (chosen.reasoningEffort && info && info.efforts.length > 0) {
-        const ok = info.efforts.map((e) => e.effort);
-        if (!ok.includes(chosen.reasoningEffort)) {
-          return {
-            ...text(
-              `Model ${chosen.model} does not accept reasoningEffort '${chosen.reasoningEffort}'. ` +
-                `It supports: ${ok.join(", ")}.`,
-            ),
-            isError: true,
-          };
-        }
-      }
+      // Same pre-spawn guard as codex_start: bad model or effort fails fast here
+      // rather than as a 400 minutes into the run.
+      const problem = preflight(index, chosen.model, chosen.reasoningEffort);
+      if (problem) return { ...text(problem), isError: true };
 
       const meta = startJob({
         prompt: plan,
