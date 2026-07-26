@@ -83,13 +83,24 @@ function notFound(jobId: string) {
  * job finishing with Monitor (an until-loop) rather than re-polling. A timed sleep
  * is a trap: this harness blocks foreground sleep, so the call returns at once and
  * the announced wait becomes a fiction the model pays for by re-polling anyway.
+ *
+ * A second, quieter trap sits right next to that one: a model that has learned not
+ * to call sleep can still narrate "I'll check back in a bit" and then simply end
+ * the turn with no tool call at all. Nothing here brings it back on its own — that
+ * promise is unfulfilled until the human re-prompts. There is no tool-call trace to
+ * catch this variant, so the wording below forbids the narration itself, not just
+ * the sleep call: either act (continue other work, or call Monitor) in the same
+ * turn as the promise, or don't make the promise.
  */
 const STILL_RUNNING_STEER =
   "Still running — no final answer yet. Don't re-check in a loop: each check is a " +
   "model turn, so keep working on something else and collect when you next need it. " +
   "If there is genuinely nothing else to do, block on the job finishing with Monitor " +
   "(an until-loop), never a timed sleep — this harness ignores foreground sleep, so a " +
-  "sleep-then-recheck just burns turns.";
+  "sleep-then-recheck just burns turns. Do not end this turn merely promising to check " +
+  "back later ('I'll wait for it', 'I'll check again shortly') — nothing will bring you " +
+  "back on its own, so that promise goes unfulfilled until the user re-prompts you. If " +
+  "you say you'll check later, actually call Monitor now; otherwise keep working now.";
 
 /** The shape shared by status/list, kept small so polling stays cheap. */
 function brief(meta: JobMeta) {

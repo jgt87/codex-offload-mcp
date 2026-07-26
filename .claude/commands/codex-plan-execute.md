@@ -19,8 +19,10 @@ Task: $ARGUMENTS
    collect with `codex_result` when you're ready, which checks Codex's report against git. Don't
    narrate a wait and fire `sleep` — foreground `sleep` is blocked by the harness, so the wait never
    happens and you just re-poll seconds later. If you genuinely have nothing else to do, block on
-   completion with `Monitor` (an until-loop on the job finishing) instead of a timed poll. If Codex
-   reports a blocker, revise the plan and resume with `codex_reply`.
+   completion with `Monitor` (an until-loop on the job finishing) instead of a timed poll. Also don't
+   narrate a wait and fire nothing — ending the turn on "I'll check back shortly" leaves nothing to
+   bring you back; either call `Monitor` now or keep working now. If Codex reports a blocker, revise
+   the plan and resume with `codex_reply`.
 
 If the task is exploratory (each step changes what you'd do next) or needs this conversation's
 context to execute, say so and do it in-process instead — plan→execute only fits work whose shape is

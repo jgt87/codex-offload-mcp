@@ -209,6 +209,16 @@ the actual token burn, not the payload size. The collaboration-mode commands rep
 underlying reach-for-`sleep` habit is global harness behaviour and cannot be fixed from here, but
 every runtime surface that precedes it now points the other way.
 
+There is a second, quieter failure mode a model finds once it has learned not to call `sleep`: it
+narrates "I'll check back in a bit" or "I'll wait for that timer" and then simply ends the turn with
+no tool call at all — no `Monitor`, no continued work, nothing. There is no background timer in a
+normal conversation turn; ending the turn just returns control to the human, so the promised check
+never happens until they re-prompt. This has no tool-call trace to catch, so it cannot be guarded
+against the way the `sleep` case is — the only fix is closing the wording gap in the steer itself.
+`STILL_RUNNING_STEER` and the collaboration-mode commands therefore forbid the narration, not just
+the sleep call: a promise to check back later is only valid in the same turn it's made, backed by
+either continuing other work now or an actual `Monitor` call now.
+
 **Jobs are detached and disk-backed.** State lives in `~/.codex-mcp/jobs/<jobId>/`
 (`meta.json`, `events.jsonl`, `stderr.log`, `last-message.txt`, `prompt.txt`), not in memory,
 because a job outlives the server process that started it. Never move job state into a module-level
