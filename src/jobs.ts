@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveCodexBin } from "./codexBin.js";
+import { tryWinLaunchHidden } from "./winSpawn.js";
 import {
   captureBaseline,
   composePrompt,
@@ -72,6 +73,7 @@ const F = {
   result: "last-message.txt",
   prompt: "prompt.txt",
   schema: "schema.json",
+  winWrapperConfig: "win-wrapper-config.json",
 };
 
 const jobDir = (jobId: string) => path.join(JOBS_DIR, jobId);
@@ -342,6 +344,30 @@ function writeSchema(jobId: string): string {
   return file;
 }
 
+/** Shared by both launch paths so their exit bookkeeping can't drift apart. */
+function recordExit(jobId: string, code: number | null): void {
+  const current = readMeta(jobId);
+  if (!current || current.state === "cancelled") return;
+  current.state = code === 0 ? "done" : "failed";
+  current.exitCode = code;
+  current.endedAt = Date.now();
+  current.threadId ??= getThreadId(jobId);
+  if (code !== 0) {
+    const err = readTail(jobFile(jobId, F.stderr), 4000).trim();
+    if (err) current.error = truncate(err, 600);
+  }
+  writeMeta(current);
+}
+
+function recordError(jobId: string, message: string): void {
+  const current = readMeta(jobId);
+  if (!current) return;
+  current.state = "failed";
+  current.error = message;
+  current.endedAt = Date.now();
+  writeMeta(current);
+}
+
 function launch(
   jobId: string,
   args: string[],
@@ -356,37 +382,55 @@ function launch(
   // the command line.
   fs.writeFileSync(jobFile(jobId, F.prompt), promptText, "utf8");
 
+  const bin = resolveCodexBin();
+
+  // On Windows, prefer a wrapper process launched with CREATE_NEW_CONSOLE
+  // over a plain detached spawn: DETACHED_PROCESS (what `detached: true`
+  // maps to below) gives Codex no console at all, so every console-mode
+  // command it runs allocates its own fresh, briefly-visible one. The
+  // wrapper gets a real console, hides it immediately, and Codex (launched
+  // as the wrapper's own child) reuses it — see winSpawn.ts for the full
+  // account of what was tried and ruled out first. Falls through to the
+  // plain spawn below if koffi is unavailable or CreateProcessW fails, so
+  // job survival never depends on the wrapper working.
+  if (process.platform === "win32") {
+    const won = tryWinLaunchHidden(jobFile(jobId, F.winWrapperConfig), {
+      command: bin.command,
+      args,
+      cwd,
+      stdinFile: jobFile(jobId, F.prompt),
+      stdoutFile: jobFile(jobId, F.events),
+      stderrFile: jobFile(jobId, F.stderr),
+      useShell: bin.useShell,
+    });
+    if (won) {
+      const meta: JobMeta = { ...base, pid: won.pid };
+      writeMeta(meta);
+      won.onExit((code) => recordExit(jobId, code));
+      return meta;
+    }
+  }
+
   const stdinFd = fs.openSync(jobFile(jobId, F.prompt), "r");
   const outFd = fs.openSync(jobFile(jobId, F.events), "a");
   const errFd = fs.openSync(jobFile(jobId, F.stderr), "a");
 
-  const bin = resolveCodexBin();
   let child;
   try {
     child = spawn(bin.command, args, {
       cwd,
       // Required for the job to outlive this server. On Windows this maps to
-      // DETACHED_PROCESS, which carries a trade-off: Codex then has no console
-      // of its own, so every console-mode process it spawns — a shell per
-      // command it runs — allocates one. Those consoles are transient and exit
-      // with the command, but while a job runs they can surface as briefly
-      // visible windows, depending on the machine's default terminal
-      // application.
+      // DETACHED_PROCESS: Codex gets no console of its own, so every
+      // console-mode process it spawns — a shell per command it runs —
+      // allocates one. Those consoles are transient and exit with the
+      // command, but while a job runs they can surface as briefly visible
+      // windows. This is the fallback path (see above); the primary Windows
+      // path avoids this trade-off entirely when it's available.
       //
       // Dropping this flag avoids that, but the job is then killed the moment
       // this server exits, which defeats the whole point of the server.
       // Verified both ways: a non-detached child dies with its parent, a
       // detached one keeps running.
-      //
-      // `conhost.exe --headless` looks like a way to hand Codex a windowless
-      // console for its children to inherit. It launches and sustains children
-      // fine when started normally, but is incompatible with DETACHED_PROCESS:
-      // the wrapped process never runs at all. Verified — do not retry it.
-      //
-      // windowsHide below is inert while this flag is set, since there is no
-      // console for CREATE_NO_WINDOW to suppress. A real fix needs a Job Object
-      // with CREATE_BREAKAWAY_FROM_JOB, which Node cannot express without a
-      // native addon. Do not "optimise" this without re-testing survival.
       detached: true,
       stdio: [stdinFd, outFd, errFd],
       shell: bin.useShell,
@@ -403,27 +447,8 @@ function launch(
 
   // Detaching means the job outlives this server; while we are alive we still
   // get the exit event and can record the real exit code.
-  child.on("exit", (code) => {
-    const current = readMeta(jobId);
-    if (!current || current.state === "cancelled") return;
-    current.state = code === 0 ? "done" : "failed";
-    current.exitCode = code;
-    current.endedAt = Date.now();
-    current.threadId ??= getThreadId(jobId);
-    if (code !== 0) {
-      const err = readTail(jobFile(jobId, F.stderr), 4000).trim();
-      if (err) current.error = truncate(err, 600);
-    }
-    writeMeta(current);
-  });
-  child.on("error", (err) => {
-    const current = readMeta(jobId);
-    if (!current) return;
-    current.state = "failed";
-    current.error = err.message;
-    current.endedAt = Date.now();
-    writeMeta(current);
-  });
+  child.on("exit", (code) => recordExit(jobId, code));
+  child.on("error", (err) => recordError(jobId, err.message));
   child.unref();
 
   return meta;
