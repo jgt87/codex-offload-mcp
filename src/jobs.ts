@@ -79,6 +79,9 @@ const F = {
 const jobDir = (jobId: string) => path.join(JOBS_DIR, jobId);
 const jobFile = (jobId: string, name: string) => path.join(jobDir(jobId), name);
 
+/** Absolute path polled by the driving model's one-shot background wait. */
+export const metaFilePath = (jobId: string) => path.resolve(jobFile(jobId, F.meta));
+
 function readMeta(jobId: string): JobMeta | undefined {
   try {
     return JSON.parse(fs.readFileSync(jobFile(jobId, F.meta), "utf8")) as JobMeta;

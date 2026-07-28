@@ -8,6 +8,7 @@ import {
   getJob,
   JOBS_DIR,
   listJobs,
+  metaFilePath,
   pruneJobs,
   readResult,
   readStderr,
@@ -79,28 +80,50 @@ function notFound(jobId: string) {
  * What to tell the driving model when a job is still running. Each status/result
  * check is a full model turn, so re-checking in a loop is the actual token burn —
  * not the payload size. Steer to the pattern CLAUDE.md documents: keep working and
- * collect later, and only when there is genuinely nothing else to do, block on the
- * job finishing with Monitor (an until-loop) rather than re-polling. A timed sleep
- * is a trap: this harness blocks foreground sleep, so the call returns at once and
- * the announced wait becomes a fiction the model pays for by re-polling anyway.
+ * collect later, and only when there is genuinely nothing else to do, arm a Bash
+ * `run_in_background` command that exits when this one job finishes. Monitor is for
+ * repeated, indefinite event streams; using it for a one-shot completion wait is a
+ * category mismatch. A timed foreground sleep is also a trap: this harness blocks
+ * it, so the call returns at once and the announced wait becomes a fiction the
+ * model pays for by re-polling anyway.
  *
  * A second, quieter trap sits right next to that one: a model that has learned not
  * to call sleep can still narrate "I'll check back in a bit" and then simply end
  * the turn with no tool call at all. Nothing here brings it back on its own — that
  * promise is unfulfilled until the human re-prompts. There is no tool-call trace to
  * catch this variant, so the wording below forbids the narration itself, not just
- * the sleep call: either act (continue other work, or call Monitor) in the same
- * turn as the promise, or don't make the promise.
+ * the sleep call: either act (continue other work, or arm the background Bash wait)
+ * in the same turn as the promise, or don't make the promise.
  */
-const STILL_RUNNING_STEER =
-  "Still running — no final answer yet. Don't re-check in a loop: each check is a " +
-  "model turn, so keep working on something else and collect when you next need it. " +
-  "If there is genuinely nothing else to do, block on the job finishing with Monitor " +
-  "(an until-loop), never a timed sleep — this harness ignores foreground sleep, so a " +
-  "sleep-then-recheck just burns turns. Do not end this turn merely promising to check " +
-  "back later ('I'll wait for it', 'I'll check again shortly') — nothing will bring you " +
-  "back on its own, so that promise goes unfulfilled until the user re-prompts you. If " +
-  "you say you'll check later, actually call Monitor now; otherwise keep working now.";
+function waitCommand(jobId: string): string {
+  const metaPath = metaFilePath(jobId)
+    .replaceAll("\\", "/")
+    .replaceAll('"', '\\"')
+    .replaceAll("$", "\\$")
+    .replaceAll("`", "\\`");
+  return (
+    `while grep -q '"state": "running"' "${metaPath}"; do sleep 3; done; ` +
+    `state=$(grep -o '"state": "[^"]*"' "${metaPath}" | head -n 1 | cut -d'"' -f4); ` +
+    `until [ -n "$state" ]; do sleep 1; state=$(grep -o '"state": "[^"]*"' "${metaPath}" | ` +
+    `head -n 1 | cut -d'"' -f4); done; ` +
+    `printf 'Codex job %s finished with state %s\\n' '${jobId}' "$state"`
+  );
+}
+
+function stillRunningSteer(jobId: string): string {
+  return (
+    "Still running — no final answer yet. Don't re-check in a loop: each check is a " +
+    "model turn, so keep working on something else and collect when you next need it. " +
+    "If there is genuinely nothing else to do, arm this one-shot wait now via Bash with " +
+    `run_in_background (not Monitor, which is for repeated events): ${waitCommand(jobId)} ` +
+    "The command exits after printing one completion line. Never use a timed foreground " +
+    "sleep — this harness ignores it, so a sleep-then-recheck just burns turns. Do not end " +
+    "this turn merely promising to check " +
+    "back later ('I'll wait for it', 'I'll check again shortly') — nothing will bring you " +
+    "back on its own, so that promise goes unfulfilled until the user re-prompts you. If " +
+    "you say you'll check later, actually arm the Bash wait now; otherwise keep working now."
+  );
+}
 
 /** The shape shared by status/list, kept small so polling stays cheap. */
 function brief(meta: JobMeta) {
@@ -293,7 +316,13 @@ server.registerTool(
       });
       return text({
         ...brief(meta),
-        note: "Started in the background. Keep working; check codex_status when you need it.",
+        watchCommand: waitCommand(meta.jobId),
+        note:
+          "Started in the background. If you have nothing else to do before you'll need this " +
+          "result, arm the wait now — run `watchCommand` via Bash with `run_in_background` (not " +
+          "Monitor: that tool is for repeated events, this is a one-shot completion wait) — " +
+          "you'll get a single notification when it finishes. Otherwise keep working and collect " +
+          "with codex_result later.",
       });
     } catch (err) {
       return { ...text(`Failed to start Codex job: ${(err as Error).message}`), isError: true };
@@ -397,9 +426,14 @@ server.registerTool(
       });
       return text({
         ...brief(meta),
+        watchCommand: waitCommand(meta.jobId),
         note:
-          "Executing your plan in the background. Keep working; check codex_status when you need " +
-          "it. If Codex reports a blocker, revise the plan and send it with codex_reply.",
+          "Executing your plan in the background. If you have nothing else to do before you'll " +
+          "need this result, arm the wait now — run `watchCommand` via Bash with " +
+          "`run_in_background` (not Monitor: that tool is for repeated events, this is a one-shot " +
+          "completion wait) — you'll get a single notification when it finishes. Otherwise keep " +
+          "working and collect with codex_result later. If Codex reports a blocker, revise the " +
+          "plan and send it with codex_reply.",
       });
     } catch (err) {
       return { ...text(`Failed to start plan execution: ${(err as Error).message}`), isError: true };
@@ -429,7 +463,7 @@ server.registerTool(
     const events = summarizeEvents(jobId, verbose ? 100 : 5);
     return text({
       ...brief(meta),
-      ...(meta.state === "running" ? { note: STILL_RUNNING_STEER } : {}),
+      ...(meta.state === "running" ? { note: stillRunningSteer(jobId) } : {}),
       commandsRun: events.commandsRun,
       filesTouched: events.filesTouched,
       recentActivity: events.activity,
@@ -466,7 +500,7 @@ server.registerTool(
     if (meta.state === "running") {
       return text({
         ...brief(meta),
-        note: STILL_RUNNING_STEER,
+        note: stillRunningSteer(jobId),
         commandsRun: events.commandsRun,
         filesTouched: events.filesTouched,
       });

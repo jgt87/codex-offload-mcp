@@ -10,10 +10,12 @@ Task: $ARGUMENTS
 1. **Dispatch** with `codex_start(prompt, cwd)` — a self-contained prompt, since Codex cannot see
    this conversation. You get a jobId back immediately; keep working meanwhile. Don't sleep-poll —
    foreground `sleep` is blocked by the harness, so a narrated wait collapses into an instant re-poll;
-   do real work and collect with `codex_result` when ready, or block on completion with `Monitor`.
+   do real work and collect with `codex_result` when ready, or run the returned `watchCommand` via
+   Bash with `run_in_background` for a one-shot completion notification. Don't use `Monitor` for
+   this: it is for repeated events, not a single job-completion wait.
    Don't just say "I'll check back later" and end the turn either — nothing brings you back on its
-   own, so that promise goes unfulfilled until the user re-prompts you; either call `Monitor` now or
-   keep working now.
+   own, so that promise goes unfulfilled until the user re-prompts you; either arm `watchCommand` now
+   or keep working now.
 2. **Collect and review** with `codex_result`. Trust `actualChanges` (git's account) over Codex's
    own report, and re-read each changed file before judging it. Check correctness, not just that it
    ran.

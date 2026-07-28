@@ -200,24 +200,28 @@ failure cannot pin the fallback until restart.
 the call returns at once and the model re-polls seconds later, making the announced wait a fiction. The
 whole point of non-blocking delegation is that there *is* other work to do meanwhile, so the right move
 is almost always to keep working and collect with `codex_result` when ready. When there is genuinely
-nothing else, block on the job actually finishing with `Monitor` (an until-loop), never a timed
-`sleep`. This steer is placed where the driving model actually reads it at the moment of temptation:
-the still-running responses from `codex_status` and `codex_result` carry `STILL_RUNNING_STEER`
-(`index.ts`), and the tool descriptions say "keep working, don't re-check in a loop" rather than the
-old "poll with codex_status" — because each check is a full model turn, so a tight re-check loop is
-the actual token burn, not the payload size. The collaboration-mode commands repeat it too. The
-underlying reach-for-`sleep` habit is global harness behaviour and cannot be fixed from here, but
-every runtime surface that precedes it now points the other way.
+nothing else, use the job's `watchCommand` via Bash with `run_in_background`; its polling loop exits
+when that one job leaves `running`, producing exactly one completion notification. Do not use
+`Monitor` here: it is built and rate-limited for repeated, indefinite event streams, not a one-shot
+completion wait. This steer is placed where the driving model actually reads it at the moment of
+temptation: `codex_start` and `codex_execute_plan` return the per-job command, while still-running
+responses from `codex_status` and `codex_result` include it in `stillRunningSteer` (`index.ts`). The
+tool descriptions say "keep working, don't re-check in a loop" rather than the old "poll with
+codex_status" — because each check is a full model turn, so a tight re-check loop is the actual token
+burn, not the payload size. The collaboration-mode commands repeat it too. The underlying
+reach-for-`sleep` habit is global harness behaviour and cannot be fixed from here, but every runtime
+surface that precedes it now points the other way.
 
 There is a second, quieter failure mode a model finds once it has learned not to call `sleep`: it
 narrates "I'll check back in a bit" or "I'll wait for that timer" and then simply ends the turn with
-no tool call at all — no `Monitor`, no continued work, nothing. There is no background timer in a
-normal conversation turn; ending the turn just returns control to the human, so the promised check
-never happens until they re-prompt. This has no tool-call trace to catch, so it cannot be guarded
-against the way the `sleep` case is — the only fix is closing the wording gap in the steer itself.
-`STILL_RUNNING_STEER` and the collaboration-mode commands therefore forbid the narration, not just
-the sleep call: a promise to check back later is only valid in the same turn it's made, backed by
-either continuing other work now or an actual `Monitor` call now.
+no tool call at all — no background Bash wait, no continued work, nothing. There is no background
+timer in a normal conversation turn; ending the turn just returns control to the human, so the
+promised check never happens until they re-prompt. This has no tool-call trace to catch, so it cannot
+be guarded against the way the `sleep` case is — the only fix is closing the wording gap in the steer
+itself. `stillRunningSteer` and the collaboration-mode commands therefore forbid the narration, not
+just the sleep call: a promise to check back later is only valid in the same turn it's made, backed
+by either continuing other work now or actually arming `watchCommand` with Bash
+`run_in_background` now.
 
 **Jobs are detached and disk-backed.** State lives in `~/.codex-mcp/jobs/<jobId>/`
 (`meta.json`, `events.jsonl`, `stderr.log`, `last-message.txt`, `prompt.txt`), not in memory,

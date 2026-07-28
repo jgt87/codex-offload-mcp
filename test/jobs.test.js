@@ -21,11 +21,16 @@ const {
   elapsedSeconds,
   getJob,
   listJobs,
+  metaFilePath,
   pruneJobs,
   readResult,
   readStderr,
   summarizeEvents,
 } = await import("../dist/jobs.js");
+
+test("metaFilePath returns the absolute canonical metadata path", () => {
+  assert.equal(metaFilePath("job-path"), join(jobsDir, "job-path", "meta.json"));
+});
 
 after(() => {
   rmSync(jobsDir, { recursive: true, force: true, maxRetries: 3 });
