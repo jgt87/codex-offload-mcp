@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.repowise/
+
+# repowise owner-digest key (local)
+.repowise/events.key
+.claude/
